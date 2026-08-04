@@ -1,0 +1,60 @@
+{
+  "name": "dayflow-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DayFlow AI - a cloud-first, AI-assisted personal time intelligence platform built around Moments.",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "vapid:generate": "node scripts/generate-vapid-keys.mjs",
+    "icons:generate": "node scripts/generate-icons.mjs",
+    "budget": "node scripts/check-bundle-budget.mjs build-output.txt",
+    "db:bundle": "node scripts/build-all-migrations.mjs",
+    "db:bundle:check": "node scripts/build-all-migrations.mjs --check",
+    "db:types": "supabase gen types typescript --linked > src/lib/supabase/database.types.ts"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.12.4",
+    "@supabase/supabase-js": "^2.112.0",
+    "@tanstack/react-query": "^5.101.4",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.4.0",
+    "lucide-react": "^1.28.0",
+    "next": "^15.5.22",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "recharts": "^3.10.1",
+    "server-only": "^0.0.1",
+    "tailwind-merge": "^3.4.0",
+    "web-push": "^3.6.7",
+    "zod": "^4.4.3",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.2.0",
+    "@playwright/test": "^1.62.1",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/web-push": "^3.6.4",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "^15.5.22",
+    "prettier": "^3.4.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.7"
+  }
+}

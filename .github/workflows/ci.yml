@@ -1,0 +1,242 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Lets a maintainer re-run the suite without an empty commit.
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseded runs on the same branch are pointless work and delay the run that
+  # matters.
+  cancel-in-progress: true
+
+env:
+  # Placeholders only. The build and the public end-to-end suite must pass with no
+  # real project behind them, which is what keeps CI runnable on a fork and on a
+  # fresh clone. Anything that needs live credentials skips itself.
+  NEXT_PUBLIC_APP_URL: http://localhost:3000
+  NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+  SUPABASE_SERVICE_ROLE_KEY: placeholder-service-role-key
+  CRON_SECRET: placeholder-cron-secret-value
+  AI_ENABLED: "false"
+
+jobs:
+  verify:
+    name: Lint, test and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the engines field in package.json.
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        # ci rather than install: the lockfile is the contract, and a CI run that
+        # silently resolves a different tree is not testing what will ship.
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm run test
+
+      - name: Build
+        # next build runs the full type check against the generated route types,
+        # so this is also where a broken typed link is caught.
+        #
+        # The output is captured because the bundle budget step below parses the
+        # route table out of it, which is cheaper and more faithful than building
+        # a second time to measure. build-output.txt is gitignored.
+        run: |
+          # Without pipefail the pipeline exits with tee's status and a failed
+          # build reads as a pass. GitHub's default shell sets -e but not -o
+          # pipefail.
+          set -o pipefail
+          npm run build 2>&1 | tee build-output.txt
+
+      - name: Type check
+        # Redundant with the build on paper, but it covers the files the build does
+        # not reach - tests, scripts and config - and it is nearly free once the
+        # route types exist.
+        run: npm run typecheck
+
+      - name: Bundle size budget
+        # DF-CD-004. Placed here rather than in a job of its own because the only
+        # input it needs is the route table the build already printed, and a
+        # separate job would have to repeat the build to get it.
+        #
+        # Three routes are over budget today and are named, with ceilings, in the
+        # script. They fail this step if they grow, and any other route fails it on
+        # crossing 200 kB. ADR-015 records why they are tolerated rather than
+        # either ignored or allowed to turn every pull request red.
+        run: npm run budget
+
+      - name: Upload build output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: next-build-log
+          # The captured log is what makes a budget failure diagnosable after the
+          # fact: it holds the full route table, not just the routes that failed.
+          path: |
+            .next/
+            build-output.txt
+          retention-days: 3
+          if-no-files-found: ignore
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Audit dependencies
+        # DF-SEC-026. Its own job rather than a step in verify, and with no needs,
+        # because an advisory is published by a third party at a moment of their
+        # choosing: as a step it would turn an unrelated pull request red for a
+        # reason the author cannot fix, which trains everyone to ignore the
+        # result. This way the failure is legible and isolated.
+        #
+        # High and above only. The tree is largely build-time tooling, and a
+        # low-severity advisory in something that never runs in production is not
+        # a reason to block a release - it is a reason to read GO-LIVE.md 4.2.
+        #
+        # No npm ci first: audit resolves the committed lockfile against the
+        # registry and does not need the tree on disk.
+        run: npm audit --audit-level=high
+
+  e2e:
+    name: End-to-end (public routes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: verify
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install Playwright browsers
+        # --with-deps pulls the system libraries the browsers need, which the
+        # runner image does not ship.
+        run: npx playwright install --with-deps chromium
+
+      - name: Run public end-to-end suite
+        # Only the suite that needs no database. The authenticated suite skips
+        # itself here for want of E2E_EMAIL, which is intentional: see
+        # e2e/authenticated.spec.ts.
+        run: npx playwright test e2e/public-routes.spec.ts
+
+      - name: Upload traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  migrations:
+    name: Migrations apply cleanly
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply migrations in order
+        # A migration that only ever runs against an already-migrated database is
+        # untested. This proves the suite works from empty, which is what a new
+        # environment and a restored backup both do.
+        #
+        # Objects Supabase provides - the auth schema, the service_role and
+        # authenticated roles, pg_cron - are stubbed first, so this checks the SQL
+        # rather than reimplementing the platform.
+        env:
+          PGPASSWORD: postgres
+        run: |
+          set -euo pipefail
+
+          psql -h localhost -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+            create extension if not exists pgcrypto;
+            create schema if not exists auth;
+            create table auth.users (
+              id uuid primary key default gen_random_uuid(),
+              email text
+            );
+            create or replace function auth.uid() returns uuid
+              language sql stable as $$ select null::uuid $$;
+            do $$ begin
+              if not exists (select 1 from pg_roles where rolname = 'authenticated') then
+                create role authenticated;
+              end if;
+              if not exists (select 1 from pg_roles where rolname = 'anon') then
+                create role anon;
+              end if;
+              if not exists (select 1 from pg_roles where rolname = 'service_role') then
+                create role service_role;
+              end if;
+            end $$;
+            create publication supabase_realtime;
+          SQL
+
+          for file in $(ls supabase/migrations/*.sql | sort); do
+            echo "Applying $file"
+            # 0011 schedules pg_cron jobs and reads Vault secrets, neither of
+            # which exist outside Supabase. Skipping it here is honest; it is
+            # verified by the scheduled-jobs runbook instead.
+            case "$file" in
+              *0011_scheduled_jobs.sql) echo "  skipped (requires pg_cron and Vault)"; continue ;;
+            esac
+            psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f "$file"
+          done
+
+      - name: Re-apply migrations to prove they are idempotent
+        env:
+          PGPASSWORD: postgres
+        run: |
+          set -euo pipefail
+          for file in $(ls supabase/migrations/*.sql | sort); do
+            case "$file" in
+              *0011_scheduled_jobs.sql) continue ;;
+            esac
+            psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f "$file"
+          done

@@ -1,0 +1,828 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import { BellOff, BellRing, LogOut } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Badge, Card, CardHeader, Skeleton } from "@/components/ui/card";
+import { Field, Input, Select, Switch } from "@/components/ui/field";
+import { useSession } from "@/lib/session-context";
+import { useCategories } from "@/features/categories/use-categories";
+import { usePush } from "@/features/notifications/use-push";
+import { useSettings, useUpdateSettings } from "./use-settings";
+import { DataExportCard } from "./data-export-card";
+import { DeleteAccountCard } from "./delete-account-card";
+import { MIN_REMINDER_INTERVAL_MINUTES } from "@/lib/domain/reminder-rules";
+import { formatDuration } from "@/lib/format";
+import type { SettingsInput } from "@/lib/schemas";
+import type { Settings } from "@/lib/supabase/database.types";
+
+const TIME_ZONES = (() => {
+  // Full IANA list where the browser exposes it, falling back to a short list so
+  // the control is never empty on older engines.
+  const supported = (Intl as unknown as { supportedValuesOf?: (key: string) => string[] })
+    .supportedValuesOf;
+
+  if (typeof supported === "function") {
+    try {
+      return supported("timeZone");
+    } catch {
+      /* fall through */
+    }
+  }
+
+  return [
+    "UTC",
+    "Asia/Kolkata",
+    "Europe/London",
+    "America/New_York",
+    "America/Los_Angeles",
+  ];
+})();
+
+export function SettingsView() {
+  const { email, timeZone } = useSession();
+  const { data: settings, isLoading } = useSettings();
+  const update = useUpdateSettings();
+
+  if (isLoading || !settings) {
+    return (
+      <div className="space-y-3">
+        <Skeleton className="h-8 w-40" />
+        <Skeleton className="h-48 w-full" />
+        <Skeleton className="h-48 w-full" />
+      </div>
+    );
+  }
+
+  const set: Setter = (key, value) => {
+    update.mutate({ [key]: value } as SettingsInput);
+  };
+
+  return (
+    <div className="space-y-5">
+      <header>
+        <h1 className="text-xl font-semibold text-text">Settings</h1>
+        <p className="mt-1 text-sm text-text-muted">
+          Every default in DayFlow is a suggestion. Changes save as you make them.
+        </p>
+      </header>
+
+      <QueueAndRemindersCard settings={settings} set={set} />
+      <NotificationsCard settings={settings} set={set} />
+      <ValidationCard settings={settings} set={set} />
+      <TimeAndLocaleCard settings={settings} set={set} browserTimeZone={timeZone} />
+      <AnalyticsCard settings={settings} set={set} />
+      <ProductivityCard settings={settings} set={set} />
+      <AiCard settings={settings} set={set} />
+      <AppearanceCard settings={settings} set={set} />
+      <AccountCard email={email} />
+      <DataExportCard />
+      <DeleteAccountCard />
+    </div>
+  );
+}
+
+/**
+ * Keyed off the validation schema rather than the row type, so that a control
+ * offering a value the schema forbids is a compile error rather than a rejected
+ * save the user discovers by trying it.
+ */
+type Setter = <K extends keyof SettingsInput>(key: K, value: SettingsInput[K]) => void;
+
+interface SectionProps {
+  settings: Settings;
+  set: Setter;
+}
+
+function QueueAndRemindersCard({ settings, set }: SectionProps) {
+  return (
+    <Card>
+      <CardHeader
+        title="Queue and reminders"
+        description="How many activities can be open at once, and how often DayFlow nudges you about them."
+      />
+
+      <div className="space-y-4 p-4 pt-0">
+        <Field
+          label="Open activities allowed at once"
+          hint="Two is the default. More than a handful and the queue stops being a queue."
+        >
+          {({ id, describedBy }) => (
+            <Select
+              id={id}
+              aria-describedby={describedBy}
+              value={String(settings.queue_limit)}
+              onChange={(event) => set("queue_limit", Number(event.target.value))}
+            >
+              {[1, 2, 3, 4, 5].map((count) => (
+                <option key={count} value={count}>
+                  {count}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
+
+        <Switch
+          checked={settings.reminders_enabled}
+          onChange={(checked) => set("reminders_enabled", checked)}
+          label="Remind me about open activities"
+        />
+
+        {settings.reminders_enabled && (
+          <Field
+            label="Reminder interval"
+            hint={`Minimum ${MIN_REMINDER_INTERVAL_MINUTES} minutes. Reminders are never queued up while quiet hours are on - they are skipped.`}
+          >
+            {({ id, describedBy }) => (
+              <Select
+                id={id}
+                aria-describedby={describedBy}
+                value={String(settings.reminder_interval_minutes)}
+                onChange={(event) =>
+                  set("reminder_interval_minutes", Number(event.target.value))
+                }
+              >
+                {[10, 15, 30, 60, 120, 180, 240, 480].map((minutes) => (
+                  <option key={minutes} value={minutes}>
+                    Every {formatDuration(minutes)}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+        )}
+
+        <Field
+          label="Warn me when something runs longer than"
+          hint="A gentle check that you have not left something open by accident."
+        >
+          {({ id, describedBy }) => (
+            <Select
+              id={id}
+              aria-describedby={describedBy}
+              value={String(settings.long_activity_warning_minutes)}
+              onChange={(event) => {
+                const warning = Number(event.target.value);
+                // The database requires auto_close > warning. Nudging the close
+                // threshold along with the warning means the user never has to
+                // discover that rule from a rejected save.
+                if (settings.auto_close_minutes <= warning) {
+                  set("auto_close_minutes", Math.min(1440, warning + 180));
+                }
+                set("long_activity_warning_minutes", warning);
+              }}
+            >
+              {[60, 120, 180, 240, 300, 360, 480, 720].map((minutes) => (
+                <option key={minutes} value={minutes}>
+                  {formatDuration(minutes)}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
+
+        <Switch
+          checked={settings.auto_close_enabled}
+          onChange={(checked) => set("auto_close_enabled", checked)}
+          label="Close forgotten activities automatically"
+          description="Recorded as an estimate, marked as such, and always editable."
+        />
+
+        {settings.auto_close_enabled && (
+          <Field
+            label="Close automatically after"
+            error={
+              settings.auto_close_minutes <= settings.long_activity_warning_minutes
+                ? "Must be longer than the warning threshold."
+                : undefined
+            }
+          >
+            {({ id }) => (
+              <Select
+                id={id}
+                value={String(settings.auto_close_minutes)}
+                onChange={(event) =>
+                  set("auto_close_minutes", Number(event.target.value))
+                }
+              >
+                {[120, 240, 360, 480, 600, 720, 960, 1440]
+                  .filter((minutes) => minutes > settings.long_activity_warning_minutes)
+                  .map((minutes) => (
+                    <option key={minutes} value={minutes}>
+                      {formatDuration(minutes)}
+                    </option>
+                  ))}
+              </Select>
+            )}
+          </Field>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function NotificationsCard({ settings, set }: SectionProps) {
+  const push = usePush();
+
+  return (
+    <Card>
+      <CardHeader
+        title="Notifications"
+        description="Permission is granted per device, so this needs enabling on each phone or computer you use."
+      />
+
+      <div className="space-y-4 p-4 pt-0">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-surface-sunken p-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-text">This device</p>
+            <p className="mt-0.5 text-xs text-text-muted">
+              {push.state === "unsupported"
+                ? "This browser cannot receive push notifications."
+                : push.state === "unconfigured"
+                  ? "Push is not configured on this deployment."
+                  : push.state === "subscribed"
+                    ? "Receiving notifications."
+                    : push.state === "denied"
+                      ? "Blocked. Re-allow notifications in your browser's site settings."
+                      : "Not receiving notifications yet."}
+            </p>
+          </div>
+
+          {push.state === "subscribed" ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              isLoading={push.isBusy}
+              onClick={() => void push.disable()}
+            >
+              <BellOff className="size-4" aria-hidden="true" />
+              Turn off
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              isLoading={push.isBusy}
+              disabled={
+                push.state === "unsupported" ||
+                push.state === "unconfigured" ||
+                push.state === "denied"
+              }
+              onClick={() => void push.enable()}
+            >
+              <BellRing className="size-4" aria-hidden="true" />
+              Enable
+            </Button>
+          )}
+        </div>
+
+        <Switch
+          checked={settings.notify_queue_reminders}
+          onChange={(checked) => set("notify_queue_reminders", checked)}
+          label="Open activity reminders"
+        />
+        <Switch
+          checked={settings.notify_long_activity}
+          onChange={(checked) => set("notify_long_activity", checked)}
+          label="Long activity warnings"
+        />
+        <Switch
+          checked={settings.notify_auto_close}
+          onChange={(checked) => set("notify_auto_close", checked)}
+          label="Tell me when something was closed automatically"
+        />
+        <Switch
+          checked={settings.notify_daily_review}
+          onChange={(checked) => set("notify_daily_review", checked)}
+          label="Daily review"
+        />
+
+        {settings.notify_daily_review && (
+          <Field label="Daily review at">
+            {({ id }) => (
+              <Input
+                id={id}
+                type="time"
+                value={settings.daily_review_time.slice(0, 5)}
+                onChange={(event) => set("daily_review_time", `${event.target.value}:00`)}
+                className="w-32"
+              />
+            )}
+          </Field>
+        )}
+
+        <Switch
+          checked={settings.notify_weekly_review}
+          onChange={(checked) => set("notify_weekly_review", checked)}
+          label="Weekly review"
+        />
+        <Switch
+          checked={settings.notify_achievements}
+          onChange={(checked) => set("notify_achievements", checked)}
+          label="Streaks and achievements"
+        />
+
+        <hr className="border-border" />
+
+        <Switch
+          checked={settings.quiet_hours_enabled}
+          onChange={(checked) => set("quiet_hours_enabled", checked)}
+          label="Quiet hours"
+          description="Reminders during this window are skipped, not saved up for later."
+        />
+
+        {settings.quiet_hours_enabled && (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="From">
+              {({ id }) => (
+                <Input
+                  id={id}
+                  type="time"
+                  value={settings.quiet_hours_start.slice(0, 5)}
+                  onChange={(event) =>
+                    set("quiet_hours_start", `${event.target.value}:00`)
+                  }
+                />
+              )}
+            </Field>
+            <Field label="Until">
+              {({ id }) => (
+                <Input
+                  id={id}
+                  type="time"
+                  value={settings.quiet_hours_end.slice(0, 5)}
+                  onChange={(event) => set("quiet_hours_end", `${event.target.value}:00`)}
+                />
+              )}
+            </Field>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function ValidationCard({ settings, set }: SectionProps) {
+  return (
+    <Card>
+      <CardHeader
+        title="Validation"
+        description="DayFlow warns rather than blocks. Overlapping activities are sometimes real."
+      />
+
+      <div className="space-y-4 p-4 pt-0">
+        <Switch
+          checked={settings.overlap_warn_enabled}
+          onChange={(checked) => set("overlap_warn_enabled", checked)}
+          label="Warn about overlapping activities"
+        />
+
+        {settings.overlap_warn_enabled && (
+          <Field label="Warn above this many overlapping at once">
+            {({ id }) => (
+              <Select
+                id={id}
+                value={String(settings.overlap_limit)}
+                onChange={(event) => set("overlap_limit", Number(event.target.value))}
+              >
+                {[1, 2, 3, 4, 5, 6, 8, 10].map((count) => (
+                  <option key={count} value={count}>
+                    {count}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+        )}
+
+        <Field
+          label="Flag unrecorded gaps longer than"
+          hint="Only within your waking hours, so sleep is not reported as a gap."
+        >
+          {({ id, describedBy }) => (
+            <Select
+              id={id}
+              aria-describedby={describedBy}
+              value={String(settings.gap_warn_hours)}
+              onChange={(event) => set("gap_warn_hours", Number(event.target.value))}
+            >
+              {[1, 2, 3, 4, 6, 8, 12].map((hours) => (
+                <option key={hours} value={hours}>
+                  {hours} hours
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Waking hours start">
+            {({ id }) => (
+              <Input
+                id={id}
+                type="time"
+                value={settings.waking_start.slice(0, 5)}
+                onChange={(event) => set("waking_start", `${event.target.value}:00`)}
+              />
+            )}
+          </Field>
+          <Field label="Waking hours end">
+            {({ id }) => (
+              <Input
+                id={id}
+                type="time"
+                value={settings.waking_end.slice(0, 5)}
+                onChange={(event) => set("waking_end", `${event.target.value}:00`)}
+              />
+            )}
+          </Field>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function TimeAndLocaleCard({
+  settings,
+  set,
+  browserTimeZone,
+}: SectionProps & { browserTimeZone: string }) {
+  const mismatched = settings.timezone !== browserTimeZone;
+
+  return (
+    <Card>
+      <CardHeader title="Time and locale" />
+
+      <div className="space-y-4 p-4 pt-0">
+        <Field
+          label="Time zone"
+          hint="Days, streaks and analytics are all calculated against this."
+        >
+          {({ id, describedBy }) => (
+            <Select
+              id={id}
+              aria-describedby={describedBy}
+              value={settings.timezone}
+              onChange={(event) => set("timezone", event.target.value)}
+            >
+              {TIME_ZONES.map((zone) => (
+                <option key={zone} value={zone}>
+                  {zone}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
+
+        {mismatched && (
+          // Travel is the common cause, and silently rewriting the setting would
+          // shuffle the boundaries of days already recorded.
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-warning/40 bg-warning/10 p-3">
+            <p className="min-w-0 flex-1 text-xs text-text">
+              This device is in <strong>{browserTimeZone}</strong>. Your days are still
+              being counted in {settings.timezone}.
+            </p>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => set("timezone", browserTimeZone)}
+            >
+              Use {browserTimeZone}
+            </Button>
+          </div>
+        )}
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Week starts on">
+            {({ id }) => (
+              <Select
+                id={id}
+                value={String(settings.week_starts_on)}
+                onChange={(event) => set("week_starts_on", Number(event.target.value))}
+              >
+                {[
+                  "Sunday",
+                  "Monday",
+                  "Tuesday",
+                  "Wednesday",
+                  "Thursday",
+                  "Friday",
+                  "Saturday",
+                ].map((day, index) => (
+                  <option key={day} value={index}>
+                    {day}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+
+          <Field label="Time format">
+            {({ id }) => (
+              <Select
+                id={id}
+                value={settings.time_format}
+                onChange={(event) =>
+                  set("time_format", event.target.value as SettingsInput["time_format"])
+                }
+              >
+                <option value="24h">24 hour</option>
+                <option value="12h">12 hour</option>
+              </Select>
+            )}
+          </Field>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function AnalyticsCard({ settings, set }: SectionProps) {
+  return (
+    <Card>
+      <CardHeader
+        title="Analytics defaults"
+        description="What you see first when you open a chart."
+      />
+
+      <div className="space-y-4 p-4 pt-0">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Default range">
+            {({ id }) => (
+              <Select
+                id={id}
+                value={settings.default_range}
+                onChange={(event) =>
+                  set(
+                    "default_range",
+                    event.target.value as SettingsInput["default_range"],
+                  )
+                }
+              >
+                <option value="daily">Day</option>
+                <option value="weekly">Week</option>
+                <option value="monthly">Month</option>
+                <option value="yearly">Year</option>
+                <option value="lifetime">All time</option>
+              </Select>
+            )}
+          </Field>
+
+          <Field label="Default grouping">
+            {({ id }) => (
+              <Select
+                id={id}
+                value={settings.default_grouping}
+                onChange={(event) =>
+                  set(
+                    "default_grouping",
+                    event.target.value as SettingsInput["default_grouping"],
+                  )
+                }
+              >
+                <option value="parent_category">Groups</option>
+                <option value="category">Individual categories</option>
+              </Select>
+            )}
+          </Field>
+        </div>
+
+        <Field label="Chart style">
+          {({ id }) => (
+            <Select
+              id={id}
+              value={settings.chart_style}
+              onChange={(event) =>
+                set("chart_style", event.target.value as SettingsInput["chart_style"])
+              }
+            >
+              <option value="donut">Donut</option>
+              <option value="pie">Pie</option>
+            </Select>
+          )}
+        </Field>
+
+        <Switch
+          checked={settings.show_distraction_default}
+          onChange={(checked) => set("show_distraction_default", checked)}
+          label="Show distracted time by default"
+        />
+        <Switch
+          checked={settings.include_estimated_default}
+          onChange={(checked) => set("include_estimated_default", checked)}
+          label="Include estimated time by default"
+          description="Estimated time comes from activities closed automatically."
+        />
+      </div>
+    </Card>
+  );
+}
+
+function ProductivityCard({ settings, set }: SectionProps) {
+  const { tree } = useCategories();
+  const weights = useMemo(
+    () => (settings.productivity_weights ?? {}) as Record<string, number>,
+    [settings.productivity_weights],
+  );
+
+  return (
+    <Card>
+      <CardHeader
+        title="Productivity score"
+        description="You decide what counts. A weight of zero means a group is neither good nor bad for the score."
+      />
+
+      <div className="space-y-4 p-4 pt-0">
+        <Switch
+          checked={settings.productivity_enabled}
+          onChange={(checked) => set("productivity_enabled", checked)}
+          label="Show a productivity score"
+        />
+
+        {settings.productivity_enabled && (
+          <div className="space-y-3">
+            {tree.parents.map((parent) => {
+              const weight = weights[parent.id] ?? 0;
+
+              return (
+                <div key={parent.id} className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <label
+                      htmlFor={`weight-${parent.id}`}
+                      className="flex min-w-0 items-center gap-2 text-sm text-text"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="size-2.5 shrink-0 rounded-full"
+                        style={{ backgroundColor: parent.color }}
+                      />
+                      <span className="truncate">{parent.name}</span>
+                    </label>
+                    <span className="shrink-0 text-sm tabular-nums text-text-muted">
+                      {weight > 0 ? `+${weight.toFixed(1)}` : weight.toFixed(1)}
+                    </span>
+                  </div>
+
+                  {/*
+                    The slider works in tenths and the stored weight is -1 to 1,
+                    matching get_productivity_score. Storing the slider's own
+                    integers would silently make every weight a hundred times too
+                    large, and the score would peg at 100 for everyone.
+                  */}
+                  <input
+                    id={`weight-${parent.id}`}
+                    type="range"
+                    min={-10}
+                    max={10}
+                    step={1}
+                    value={Math.round(weight * 10)}
+                    onChange={(event) =>
+                      set("productivity_weights", {
+                        ...weights,
+                        [parent.id]: Number(event.target.value) / 10,
+                      })
+                    }
+                    className="w-full accent-[var(--color-accent)]"
+                  />
+                </div>
+              );
+            })}
+
+            <p className="text-xs text-text-subtle">
+              Negative weights pull the score down, positive push it up, and zero means
+              neutral. The result is normalised to 0-100 against the time you actually
+              recorded, so a short day is not punished for being short.
+            </p>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function AiCard({ settings, set }: SectionProps) {
+  return (
+    <Card>
+      <CardHeader
+        title="AI insights"
+        description="Off until you say otherwise. Nothing is sent anywhere without this consent."
+      />
+
+      <div className="space-y-4 p-4 pt-0">
+        <Switch
+          checked={settings.ai_consent}
+          onChange={(checked) => set("ai_consent", checked)}
+          label="Let DayFlow generate AI insights"
+          description="Aggregated totals per category are sent - never your notes, email or category names you have marked private."
+        />
+
+        {settings.ai_consent && (
+          <>
+            <Switch
+              checked={settings.ai_daily_reports}
+              onChange={(checked) => set("ai_daily_reports", checked)}
+              label="Daily summary"
+            />
+            <Switch
+              checked={settings.ai_weekly_reports}
+              onChange={(checked) => set("ai_weekly_reports", checked)}
+              label="Weekly review"
+            />
+            <Switch
+              checked={settings.ai_monthly_reports}
+              onChange={(checked) => set("ai_monthly_reports", checked)}
+              label="Monthly review"
+            />
+            <Switch
+              checked={settings.ai_recommendations}
+              onChange={(checked) => set("ai_recommendations", checked)}
+              label="Suggestions and recommendations"
+            />
+          </>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function AppearanceCard({ settings, set }: SectionProps) {
+  const [accentDraft, setAccentDraft] = useState(settings.accent_color);
+
+  return (
+    <Card>
+      <CardHeader title="Appearance" />
+
+      <div className="space-y-4 p-4 pt-0">
+        <Field label="Theme">
+          {({ id }) => (
+            <Select
+              id={id}
+              value={settings.theme}
+              onChange={(event) =>
+                set("theme", event.target.value as SettingsInput["theme"])
+              }
+            >
+              <option value="system">Match my device</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </Select>
+          )}
+        </Field>
+
+        <Field label="Accent colour">
+          {({ id }) => (
+            <div className="flex items-center gap-3">
+              <input
+                id={id}
+                type="color"
+                value={accentDraft}
+                // Committed on blur, not on change: dragging a colour picker
+                // fires continuously and would send a write per pixel.
+                onChange={(event) => setAccentDraft(event.target.value)}
+                onBlur={() => set("accent_color", accentDraft)}
+                className="size-10 cursor-pointer rounded-md border border-border bg-transparent"
+              />
+              <span className="text-sm tabular-nums text-text-muted">{accentDraft}</span>
+            </div>
+          )}
+        </Field>
+
+        <Switch
+          checked={settings.compact_mode}
+          onChange={(checked) => set("compact_mode", checked)}
+          label="Compact spacing"
+          description="Fits more on screen. Easier on a large monitor, tighter on a phone."
+        />
+      </div>
+    </Card>
+  );
+}
+
+function AccountCard({ email }: { email: string | null }) {
+  return (
+    <Card>
+      <CardHeader title="Account" />
+
+      <div className="space-y-4 p-4 pt-0">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-sm text-text">{email ?? "Signed in"}</p>
+            <p className="mt-0.5 text-xs text-text-muted">
+              Your data syncs to every device you sign in on.
+            </p>
+          </div>
+          <Badge tone="success">Synced</Badge>
+        </div>
+
+        {/* A form POST rather than a link: signing out changes state, and a
+            prefetching browser must never be able to do it by accident. */}
+        <form action="/auth/sign-out" method="post">
+          <Button type="submit" variant="secondary">
+            <LogOut className="size-4" aria-hidden="true" />
+            Sign out
+          </Button>
+        </form>
+      </div>
+    </Card>
+  );
+}
