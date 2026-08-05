@@ -1,0 +1,16 @@
+# Normalise line endings to LF in the repository and on checkout.
+#
+# Without this, `core.autocrlf=true` (the default in Git for Windows) checks files
+# out with CRLF, and `npx prettier --check .` then fails on every file because
+# .prettierrc sets `endOfLine: "lf"`. Pinning eol=lf here overrides autocrlf, so a
+# clone on Windows matches a clone on the Linux CI runner.
+* text=auto eol=lf
+
+# Binary assets: never convert, never diff as text.
+*.png binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.woff binary
+*.woff2 binary

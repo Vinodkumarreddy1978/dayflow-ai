@@ -36,7 +36,9 @@ export default function GlobalError({
         <div className="flex min-h-dvh flex-col items-center justify-center px-4 py-10">
           <main className="w-full max-w-sm">
             <div className="rounded-xl border border-border bg-surface-raised p-6 shadow-[var(--shadow-card)]">
-              <h1 className="text-lg font-semibold text-text">DayFlow AI cannot start.</h1>
+              <h1 className="text-lg font-semibold text-text">
+                DayFlow AI cannot start.
+              </h1>
 
               <p className="mt-2 text-sm text-text-muted">
                 The application failed before any screen could load. Your recorded

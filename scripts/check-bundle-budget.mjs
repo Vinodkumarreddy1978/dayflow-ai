@@ -31,30 +31,43 @@ const BUDGET_KB = 200;
 
 /**
  * Routes that were already over budget on the day this check was wired into CI,
- * with the size each had at that moment as its ceiling.
+ * each with the size it had at that moment plus one kB as its ceiling.
  *
- * All three carry the Supabase client stack, which is not a code-splitting
- * problem and cannot be fixed inside a pull request that happens to touch them.
- * ADR-015 records the reasoning; the short version is that a gate which fails on
- * arrival is switched off within a week, and a warning nobody has to act on is
- * not a gate at all. So the known offenders are named, and everything else -
- * including these three getting worse - fails.
+ * All three are over for the same reason: they carry the Supabase browser client
+ * in their First Load JS. That is not a code-splitting problem and cannot be
+ * fixed by a pull request that happens to touch one of them. ADR-015 records the
+ * reasoning; the short version is that a gate which fails on arrival gets
+ * switched off within a week, and a warning nobody must act on is not a gate at
+ * all. So these three are named and frozen, and everything else - including
+ * these three growing - fails.
  *
- * This list is a debt register, not a second budget. Removing an entry is the
- * point of it, which is why an entry that is no longer needed fails the check
- * too: an exemption nobody is forced to revisit becomes the number.
+ * This is a debt register, not a second budget. Removing an entry is the point of
+ * it, which is why an entry that is no longer needed fails the check too: an
+ * exemption nobody is compelled to revisit quietly becomes the number.
+ *
+ * **A route that goes over budget on its own feature work does not belong here.**
+ * Adding a line is the quickest way to make this step green and is almost always
+ * the wrong one: the fix is to defer the imports that route just acquired, as the
+ * four auth screens defer the Supabase client and src/features/analytics defers
+ * Recharts. An entry here is a statement that nothing short of an architectural
+ * change will help, and it needs the founder's agreement.
+ *
+ * The one kB above each measured figure is the resolution of the measurement,
+ * not headroom: above 100 kB next build reports First Load JS to the nearest kB,
+ * so a route printed as 203 kB is somewhere in 202.5 to 203.4, and a build on
+ * another platform can legitimately print the next integer up.
  */
 const ALLOWANCES = [
-  { route: "/dashboard", ceilingKb: 206 },
-  { route: "/calendar/[date]", ceilingKb: 205 },
-  { route: "/goals", ceilingKb: 204 },
+  { route: "/dashboard", ceilingKb: 205 }, // 204 kB on 2026-08-04
+  { route: "/calendar/[date]", ceilingKb: 204 }, // 203 kB
+  { route: "/goals", ceilingKb: 203 }, // 202 kB
 ];
 
 /**
  * How far under budget an allowanced route must come before its entry is
- * reported as obsolete. A margin rather than zero because these figures move by
- * a few hundred bytes between platforms and Node versions, and a check that
- * fails on a rounding difference teaches people to distrust it.
+ * reported as obsolete. A margin rather than zero for the same reason the
+ * ceilings carry one kB: a check that fails on a rounding difference teaches
+ * people to distrust the check rather than to read it.
  */
 const STALE_MARGIN_KB = 2;
 
@@ -171,7 +184,8 @@ if (over.length > 0) {
 if (obsolete.length > 0) {
   console.error("Remove these entries from ALLOWANCES in this script:\n");
   for (const entry of obsolete) {
-    const size = entry.firstLoadKb === null ? "" : ` (${entry.firstLoadKb.toFixed(1)} kB)`;
+    const size =
+      entry.firstLoadKb === null ? "" : ` (${entry.firstLoadKb.toFixed(1)} kB)`;
     console.error(`  ${entry.route.padEnd(40)} ${entry.reason}${size}`);
   }
   console.error(

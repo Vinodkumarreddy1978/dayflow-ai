@@ -28,15 +28,24 @@ rather than construction.
 
 Verified locally on Node 24.19.0 / npm 11.17.0:
 
-| Check                  | Result                                                 |
-| ---------------------- | ------------------------------------------------------ |
-| `npm install`          | 441 packages, no errors                                |
-| `npm run format:check` | Clean                                                  |
-| `npm run lint`         | Clean                                                  |
-| `npm run test`         | 107 tests across 6 files, all passing                  |
-| `npm run build`        | 24 routes compiled, largest route 221 kB first load JS |
-| `npm run typecheck`    | Clean                                                  |
-| `npm run dev`          | Boots; landing and sign-in serve, auth guard works     |
+| Check                  | Result                                                       |
+| ---------------------- | ------------------------------------------------------------ |
+| `npm install`          | 441 packages, no errors                                      |
+| `npm run format:check` | Clean                                                        |
+| `npm run lint`         | Clean                                                        |
+| `npm run test`         | 318 tests across 14 files, all passing (measured 2026-08-05) |
+| `npm run build`        | 24 routes compiled; see the note on bundle size below        |
+| `npm run typecheck`    | Clean                                                        |
+| `npm run dev`          | Boots; landing and sign-in serve, auth guard works           |
+
+**On bundle size.** Every route is held to a budget of **200 kB First Load JS**, set in
+section 9 of
+[docs/03-ux/22-accessibility-and-responsive-standards.md](docs/03-ux/22-accessibility-and-responsive-standards.md)
+and checked by `npm run budget`. Per-route figures are deliberately not repeated here,
+because they change with every dependency and would be stale the week after they were
+written. The current numbers are wherever they were last measured: the route table printed by
+`npm run build`, and the named exemptions with their ceilings in
+`scripts/check-bundle-budget.mjs`.
 
 **Built and working:**
 
@@ -54,10 +63,20 @@ Verified locally on Node 24.19.0 / npm 11.17.0:
 | Insights          | Deterministic insight modules, optional AI wording, scheduled daily and weekly reports                      |
 | Settings          | Every configurable value in the product, saved as you change it                                             |
 
-**Not built yet:** the bundle-size CI gate and the check that blocks edits to already-merged
-migrations. Both are described in
+**Not built yet:** the check that blocks edits to already-merged migrations. It is described
+in
 [docs/05-engineering/33-cicd-and-deployment-runbook.md](docs/05-engineering/33-cicd-and-deployment-runbook.md)
-section 3 and marked as planned there rather than claimed as done.
+section 3, where it is recorded as relying on review rather than on the workflow.
+
+**CI had never run as of 4 August 2026.** `.github/workflows/ci.yml` is written - and it does
+include the bundle-size gate and a dependency audit - but nothing had been pushed to GitHub by
+that date, so GitHub Actions had never had an event to react to. The results in the table above
+are local runs on one developer machine, not a green pipeline, and they are not a substitute for
+one: every job in that workflow runs on a clean Linux checkout and has never been observed to
+succeed there. Whether it has run since is answered by the repository's Actions tab and nowhere
+else. The status note in section 3 of
+[docs/05-engineering/33-cicd-and-deployment-runbook.md](docs/05-engineering/33-cicd-and-deployment-runbook.md)
+has the detail.
 
 **Not yet verified:** everything above compiles, passes its tests and renders, but the paths
 that need a live Supabase project - real sign-up, realtime sync between two devices, an
@@ -217,31 +236,32 @@ Your project ref is the subdomain of your project URL:
 
 **Option B - SQL editor.** Open **SQL Editor** in the dashboard and run each file in
 [supabase/migrations/](supabase/migrations/) **in filename order**, `0001` through
-`0013`. Order matters: later migrations reference tables and types created by earlier
+`0015`. Order matters: later migrations reference tables and types created by earlier
 ones. Run each file completely before starting the next.
 
-If you would rather not run thirteen files by hand, [supabase/all-migrations.sql](supabase/all-migrations.sql)
+If you would rather not run fifteen files by hand, [supabase/all-migrations.sql](supabase/all-migrations.sql)
 contains all of them concatenated in the correct order. Paste that single file into the
 SQL editor instead. It is generated from the same migrations, so the result is identical.
 
 What the migrations create:
 
-| File   | Contents                                                       |
-| ------ | -------------------------------------------------------------- |
-| `0001` | Extensions and enumerated types                                |
-| `0002` | `profiles` and `settings`                                      |
-| `0003` | `parent_categories` and `categories`                           |
-| `0004` | `moments`                                                      |
-| `0005` | `goals`                                                        |
-| `0006` | AI reports, usage tracking, push subscriptions, feature flags  |
-| `0007` | Row level security policies on every table                     |
-| `0008` | Triggers: queue limit, time validation, system category guards |
-| `0009` | New-user seeding: 6 category groups, 17 categories, settings   |
-| `0010` | Analytics functions, including the midnight-split aggregation  |
-| `0011` | `pg_cron` schedules for reminders and auto-close               |
-| `0012` | Realtime publication for multi-device sync                     |
-| `0013` | New-user seeding reads the timezone captured at sign-up        |
-| `0014` | Service-role helper so scheduled reports can be generated      |
+| File   | Contents                                                                                                                                                                   |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0001` | Extensions and enumerated types                                                                                                                                            |
+| `0002` | `profiles` and `settings`                                                                                                                                                  |
+| `0003` | `parent_categories` and `categories`                                                                                                                                       |
+| `0004` | `moments`                                                                                                                                                                  |
+| `0005` | `goals`                                                                                                                                                                    |
+| `0006` | AI reports, usage tracking, push subscriptions, feature flags                                                                                                              |
+| `0007` | Row level security policies on every table                                                                                                                                 |
+| `0008` | Triggers: queue limit, time validation, system category guards                                                                                                             |
+| `0009` | New-user seeding: 6 category groups, 17 categories, settings                                                                                                               |
+| `0010` | Analytics functions, including the midnight-split aggregation                                                                                                              |
+| `0011` | `pg_cron` schedules for reminders and auto-close                                                                                                                           |
+| `0012` | Realtime publication for multi-device sync                                                                                                                                 |
+| `0013` | New-user seeding reads the timezone captured at sign-up                                                                                                                    |
+| `0014` | `get_period_facts_for_user` and `local_date_for_timezone`, so the scheduled report job can compute a report on a user's behalf and tell whose local day has actually ended |
+| `0015` | `delete_account()`, and the `0008` system-group guard narrowed so it no longer blocks the cascade from `auth.users`                                                        |
 
 > **`0011` will warn and continue** if you have not yet stored the Vault secrets from
 > step 7. That is expected. Reminders simply will not fire until you do.
@@ -321,7 +341,7 @@ select jobname, schedule, active from cron.job;
 
 Everything runs on Supabase Auth. The application never sees a password after the form
 submits it; Supabase hashes it, and the session lives in httpOnly cookies that
-[middleware.ts](middleware.ts) refreshes on every navigation and uses to guard the
+[src/middleware.ts](src/middleware.ts) refreshes on every navigation and uses to guard the
 authenticated routes.
 
 | Flow               | Starts at         | Path through the app                                                                                            |

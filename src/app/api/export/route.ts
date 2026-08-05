@@ -12,7 +12,10 @@ import {
 import {
   isExportFormat,
   isExportTableName,
+  type ExportFormat,
+  type ExportTableName,
 } from "@/features/settings/account-export-tables";
+import { logger } from "@/lib/logger";
 
 /**
  * The user's own data, on request. DF-PRV-020, DF-SET-022.
@@ -28,6 +31,40 @@ import {
  * today.
  */
 export const maxDuration = 60;
+
+/**
+ * Reports a read that failed after the response had already begun.
+ *
+ * The status line is sent with the first chunk, so a table that fails on page four
+ * cannot be answered with a 500 - the browser has a 200 and a partial file, and
+ * `use-account-export.ts` turns that into "the download stopped before it finished".
+ * That is all the user can act on, and it is the entire trace unless this is here:
+ * without it the only surviving record is whatever Next.js prints for a rejected
+ * stream, which carries no user, no table and no `event` to query on.
+ *
+ * The identifiers are the request, never the rows. Nothing from the export body
+ * passes through here, and `logger` drops a PostgreSQL `detail` field - which is
+ * where a failing query would otherwise put the offending row. DF-OBS-002, DF-OBS-005.
+ */
+async function* loggedChunks(
+  chunks: AsyncGenerator<string>,
+  context: { userId: string; format: ExportFormat; table: ExportTableName | null },
+): AsyncGenerator<string> {
+  try {
+    yield* chunks;
+  } catch (cause) {
+    logger.error("Data export failed", {
+      event: "export.error",
+      route: "/api/export",
+      ...context,
+      error: cause,
+    });
+
+    // Rethrown so the stream still aborts. A logged failure that then completes the
+    // download would hand the user a truncated copy of their account as a success.
+    throw cause;
+  }
+}
 
 export async function GET(request: Request) {
   const supabase = await createClient();
@@ -72,25 +109,31 @@ export async function GET(request: Request) {
     email_confirmed_at: user.email_confirmed_at ?? null,
   };
 
+  // Narrowed once. The two checks above have already established that a CSV request
+  // carries a valid table name and a JSON one is not asked for a table at all.
+  const csvTable =
+    format === "csv" && table !== null && isExportTableName(table) ? table : null;
+
   const chunks =
-    format === "csv" && table !== null && isExportTableName(table)
-      ? tableCsvChunks(client, exportTableSpec(table), user.id, { exportedAt })
-      : accountExportChunks(client, account, { exportedAt });
+    csvTable === null
+      ? accountExportChunks(client, account, { exportedAt })
+      : tableCsvChunks(client, exportTableSpec(csvTable), user.id, { exportedAt });
 
-  const filename = exportFilename(
-    format,
-    format === "csv" && table !== null && isExportTableName(table) ? table : null,
-    exportedAt,
-  );
+  const filename = exportFilename(format, csvTable, exportedAt);
 
-  return new Response(chunksToStream(chunks), {
-    headers: {
-      "Content-Type":
-        format === "csv" ? "text/csv; charset=utf-8" : "application/json; charset=utf-8",
-      "Content-Disposition": `attachment; filename="${filename}"`,
-      // An export is the most sensitive response this application produces. No
-      // shared cache, no browser cache, no CDN copy.
-      "Cache-Control": "private, no-store, max-age=0",
+  return new Response(
+    chunksToStream(loggedChunks(chunks, { userId: user.id, format, table: csvTable })),
+    {
+      headers: {
+        "Content-Type":
+          format === "csv"
+            ? "text/csv; charset=utf-8"
+            : "application/json; charset=utf-8",
+        "Content-Disposition": `attachment; filename="${filename}"`,
+        // An export is the most sensitive response this application produces. No
+        // shared cache, no browser cache, no CDN copy.
+        "Cache-Control": "private, no-store, max-age=0",
+      },
     },
-  });
+  );
 }

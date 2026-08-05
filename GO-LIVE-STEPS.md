@@ -3,10 +3,10 @@
 | Field        | Value                                               |
 | ------------ | --------------------------------------------------- |
 | Document ID  | - (root operator document, outside the docs/ suite) |
-| Version      | 0.1.0                                               |
+| Version      | 0.2.0                                               |
 | Status       | Draft                                               |
 | Owner        | Founder                                             |
-| Last updated | 2026-08-04                                          |
+| Last updated | 2026-08-05                                          |
 | Supersedes   | -                                                   |
 
 ---
@@ -121,6 +121,11 @@ confirmation passes.
 "Operator" means you, by hand. There is nothing in this list that another agent or a
 script can do for you, because every remaining task is either a dashboard action or a
 decision.
+
+**On the line numbers.** Steps below cite other documents as `GO-LIVE.md lines 443-445` and
+the like. Several of those documents were corrected on 5 Aug 2026 and the citations were not
+all renumbered, so treat a line number as a pointer to a paragraph rather than an address.
+The quoted wording beside each citation is what to search for.
 
 ---
 
@@ -1464,35 +1469,137 @@ received anything. The end-to-end proof is step 32 plus a reminder actually arri
 
 ## Phase 7 - After launch (steps 42-48)
 
-### Step 42. PLACEHOLDER - verify data export and account deletion when they land
+### Step 42. Verify the data export and account deletion - IRREVERSIBLE second half
 
-**Who:** operator. **Time:** unknown until the feature exists.
+**Who:** operator. **Time:** 30 minutes. **Needs:** a throwaway account, and step 16 completed.
 
-**Do not attempt this step yet, and do not follow instructions for it from anywhere else, because
-the feature does not exist as this is written.**
+Both features now exist: `src/features/settings/data-export-card.tsx` and
+`delete-account-card.tsx` on the Settings screen, `/api/export` behind the first and
+`public.delete_account()` from `0015` behind the second.
 
-A user-facing data export and an account deletion interface are being implemented right now by
-another agent, in `src/features/settings/`. As of this document, that work is visibly in progress -
-`src/features/settings/account-export-tables.ts` exists but there is no export or delete control in
-the Settings screen. The database side is already done and you applied it in step 16:
-`public.delete_account()` exists and is granted to `authenticated`.
+**Read this before you start.** Part B destroys an account and there is no undo, no point-in-time
+recovery on the free tier, and no way for anyone to reverse it afterwards. **Do part B on a
+throwaway account created for this step, never on the account you signed up with in step 33.**
+Sign up a second account now, on a real address you control, and record two or three activities in
+it so its export has something in it.
 
-The state of the world today:
+If step 16 was skipped, part B will refuse cleanly rather than half-delete: `delete-account.ts`
+maps PostgREST's `PGRST202` to "Account deletion is not available on this deployment yet, because
+the database change it needs has not been applied. Nothing has been deleted." Seeing that message
+means go back to step 16, not that the interface is broken.
 
-- `GO-LIVE.md` line 602 lists "Export and deletion available in Settings" as the one **open**
-  disagreement between the documents and the code.
-- `HANDOFF.md` lines 261-272 describes exactly what is being built and in what order, including that
-  an export must be offered before deletion proceeds (DF-PRV-023, DF-SET-025) and that the interface
-  must sign the user out immediately after deletion, because the access token stays valid until it
-  expires (DF-SET-023).
-- `GO-LIVE.md` lines 511-514 records that until the in-application export exists, the command-line
-  dump in step 43 **is** the export.
+#### Part A - the export (safe, do this on any account)
 
-**When that work lands, come back and verify at least:** the export produces every table in both
-CSV and JSON; the delete confirmation states what will be destroyed and requires typed input; the
-export is offered before deletion proceeds; and deletion signs the user out immediately. Verify it
-against a throwaway account, never your own, because there is no undo and no point-in-time recovery
-on the free tier.
+1. Sign in and open **Settings**. Scroll to the **Your data** card and press **Export my data**.
+   The dialog loads on demand - `data-export-card.tsx` uses `lazy`, so a brief blank moment on a
+   slow connection is expected, not a fault.
+2. Press **Download everything as JSON**.
+3. Choose one table with rows in it - **Activities** - from the dropdown and press **Download CSV**.
+   Repeat for **Settings**, which is the one table that always has exactly one row.
+
+**Confirm it worked:**
+
+- Two toasts reading "Your data has been downloaded", and files named
+  `dayflow-export-<yyyy-mm-dd>.json` and `dayflow-export-moments-<yyyy-mm-dd>.csv` in your
+  downloads folder (`account-export.ts` `exportFilename`).
+- Open the JSON. At the top level it has `dayflow_export_version: 1`, an `exported_at` timestamp,
+  an `account` object carrying your id, email and sign-in dates, and a `tables` object with
+  **exactly ten** keys: `profiles`, `settings`, `parent_categories`, `categories`, `moments`,
+  `goals`, `ai_reports`, `ai_usage`, `push_subscriptions`, `feature_flags`. A missing table is a
+  DF-PRV-020 failure, not a cosmetic one.
+- It parses. The writer emits the closing braces last on purpose, so a read that died partway
+  leaves invalid JSON rather than a plausible-looking truncated account.
+- The activities you recorded are in `tables.moments`, with their `note` text intact.
+- `parent_categories` contains `Distracted Time`. The row level security policy for
+  `feature_flags` also exposes global rows with a null `user_id`; the export filters those out, so
+  every row in `tables.feature_flags` should carry **your** user id and no other.
+- The CSV opens in Excel with a header row matching the column list, and a note containing a comma
+  or a line break stays in one cell.
+
+Then confirm the response is not cacheable and not reachable unauthenticated. In PowerShell:
+
+```powershell
+# Expect 401 and {"error":"Not signed in."} - no session in this request
+$anon = try {
+  Invoke-WebRequest -Uri "https://your-domain/api/export?format=json" -UseBasicParsing -ErrorAction Stop
+} catch {
+  $_.Exception.Response
+}
+[int]$anon.StatusCode
+```
+
+**Confirm:** `401`. The handler holds no elevated privilege and reads through the caller's own
+session, so an unauthenticated request has nothing to read. If this returns 200, stop and do not
+proceed - that is a data breach, not a bug.
+
+In the browser, with DevTools open on the Network tab, press **Download everything as JSON** once
+more and look at the `export` request's response headers.
+
+**Confirm:** `Cache-Control: private, no-store, max-age=0` and a `Content-Disposition: attachment`
+naming the file. This is the most sensitive response the application produces and must not be held
+by a CDN or a browser cache.
+
+#### Part B - account deletion (IRREVERSIBLE - throwaway account only)
+
+4. Sign in **as the throwaway account**. Check the address in Settings before going further.
+5. Open **Settings** and press **Delete my account** on the red-bordered **Delete account** card.
+
+**Confirm before touching anything:**
+
+- The dialog lists what is destroyed - activities and their notes, categories and groups including
+  the built-in ones, goals and streaks, AI reports and usage, settings and profile, notifications
+  on every device, and the sign-in record (DF-SET-024, DF-PRV-022).
+- It states that copies in the provider's own backups are purged within seven days.
+- There is a **Take a copy first** panel with a **Download my data** button. This is DF-PRV-023 and
+  DF-SET-025: the export must be offered before deletion proceeds. Press it and confirm a JSON file
+  downloads from inside this dialog.
+- **Delete permanently** is disabled until the confirmation phrase is typed.
+
+6. Type `Delete My Account` - deliberately in the wrong case. It should still enable the button;
+   `isDeletionConfirmed` forgives case and surrounding whitespace but not the words themselves.
+   Then type something else, such as `delete account`, and confirm the button goes back to
+   disabled.
+7. Type `delete my account` and press **Delete permanently**.
+
+**Confirm it worked:**
+
+- The browser lands on `/` as a signed-out visitor, by a full document load rather than a
+  client-side navigation (`use-delete-account.ts`). You should see the landing page, not the
+  dashboard, and not a "Something went wrong" screen.
+- Pressing Back does not return you to a working Settings screen.
+- Signing in with that account's credentials now fails.
+- In the SQL Editor, with the throwaway account's id from the export you took in the step above:
+
+```sql
+select
+  (select count(*) from auth.users        where id      = '<throwaway-user-id>') as users,
+  (select count(*) from public.profiles   where id      = '<throwaway-user-id>') as profiles,
+  (select count(*) from public.moments    where user_id = '<throwaway-user-id>') as moments,
+  (select count(*) from public.parent_categories where user_id = '<throwaway-user-id>') as parents;
+```
+
+**Confirm:** every column is `0`. `parents` is the interesting one - the
+`protect_system_parent_category` trigger from `0008` refuses to delete a system row for every
+role, and `0015` is what narrows that guard so the cascade from `auth.users` can complete. A
+non-zero `parents` with a zero `users` would mean the guard is still biting, which is the failure
+`0015` exists to prevent.
+
+8. Finally, sign up again **with the same email address**. It should succeed. DF-PRV-021 requires
+   the sign-in record to go, not just the application rows, and this is the only check that proves
+   it did.
+
+**If deletion reports "DayFlow could not reach the server, so whether the deletion completed is
+unknown"**, that is the `UNCONFIRMED` branch: the call may have committed. Do not retry blindly -
+run the SQL above first and find out.
+
+**Unverified:** I have not run any of this against a live deployment. The behaviour described is
+read from `src/features/settings/` and `src/app/api/export/route.ts`, and the unit suites
+`account-export.test.ts` and `delete-account.test.ts` cover the serialisers, the paging, the owner
+filter, the confirmation phrase and the error mapping - but nothing in this repository has ever
+executed the export against a real Supabase project or called `delete_account()` against a real
+row. Treat the exact wording of toasts and the exact download filename as likely rather than
+certain; treat the confirmations that matter - ten tables, 401 unauthenticated, zero rows after
+deletion, email reusable - as the point of the step.
 
 ### Step 43. Take your first export, and set a weekly reminder
 
@@ -1604,23 +1711,29 @@ That is the end of the sequence.
 Found while checking this list against the code. Each one would have misled you if you had followed
 it literally.
 
-| Source                                                          | What it says                                                                            | What is actually true                                                                                                                                                                        |
-| --------------------------------------------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 100-101 | `0011` reads Vault "at apply time", so the secrets must exist before the migrations run | `0011` only defines `invoke_cron_endpoint`, which reads Vault when **called** (lines 38-42). The file's own header says "read at run time" (lines 10-11). The stated ordering is unnecessary |
-| `GO-LIVE.md` 235-237                                            | Section 4.1 of the runbook calls the secrets `app_url` and `cron_secret`                | The runbook was corrected to `dayflow_app_url` / `dayflow_cron_secret` in version 0.1.1 (runbook line 107, change history line 256). `GO-LIVE.md` section 5 line 599 already says so         |
-| `HANDOFF.md` 255                                                | `/api/reports/generate` depends on `0014`                                               | It does not. That route omits the user id (`src/app/api/reports/generate/route.ts` 61-66), taking the `get_period_facts` branch. `/api/cron/daily-report` is what needs `0014`               |
-| `README.md` 218-225, 229-244                                    | Run `0001` through `0013`, "thirteen files"; the table stops at `0014`                  | There are fifteen migrations, `0001` through `0015`                                                                                                                                          |
-| `README.md` 400-407, runbook 126                                | "Push this repository to GitHub", "import the repository"                               | `git` is not installed on this machine and there is no `.git` directory. Neither document mentions this or offers an alternative. See step 7                                                 |
-| `scripts/build-all-migrations.mjs` 11                           | `npm run db:bundle:check` "is what CI runs"                                             | `.github/workflows/ci.yml` has no such step. The check works, but nothing runs it automatically. `HANDOFF.md` line 121 repeats the claim                                                     |
-| `GO-LIVE.md` 429-436, 502-503, 621-622                          | `curl -i -X POST ...`, `date +%Y-%m-%d`, `grep`                                         | Bash. In PowerShell 5.1 `curl` is an alias for `Invoke-WebRequest` and rejects those flags. This document gives PowerShell equivalents in steps 32, 27 and 43                                |
-| `GO-LIVE.md` 139, 159-160                                       | The redirect target comes from `auth-form.tsx` and `reset-password-form.tsx`            | Both redirect strings are in `src/features/auth/auth-operations.ts` lines 33 and 45. Those form files exist but are not where the value is built                                             |
-| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 121-122 | Configure redirect URLs "including `/auth/callback`"                                    | Insufficient on its own. Without the `/auth/callback**` wildcard entry, password reset silently lands on the landing page. `GO-LIVE.md` 133-144 explains it; the runbook does not mention it |
-| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 116-117 | `supabase db push` "includes `0012` and `0014`"                                         | Does not mention `0015`, which is also pending and which is what makes account deletion possible at all                                                                                      |
-| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 43-53   | The CI job table                                                                        | Omits the `audit` job that `.github/workflows/ci.yml` lines 76-102 actually defines                                                                                                          |
-| `docs/05-engineering/32-environment-and-configuration.md` 141   | Supabase Vault holds "`CRON_SECRET`"                                                    | It holds two secrets. `dayflow_app_url` is missing from that table, and it is the one that silently stops reminders                                                                          |
-| `README.md` 36-37                                               | 107 tests across 6 files; largest route 221 kB                                          | `HANDOFF.md` lines 22 and 319 say 142 tests across 8 files and 217 kB. One of the two is stale; I did not run the suite to determine which                                                   |
-| `README.md` 324                                                 | Links to `middleware.ts` at the repository root                                         | The file is `src/middleware.ts`. The root copy was removed because Next.js only loads middleware beside `app/` (`HANDOFF.md` 216-228). The link is dead                                      |
-| `README.md` 387                                                 | Realtime is disabled under **Project Settings → API**                                   | Unverified and probably stale. Publication membership is what `0012` manages; the dashboard control for it is generally under **Database**. Step 37 says to check both                       |
+Rows marked **Applied 5 Aug 2026** have since been corrected in the source document; they are kept
+because the register is also the record of what was checked, and because a row that vanishes when
+it is fixed makes it impossible to tell "verified and corrected" from "never looked at". The line
+numbers in the Source column point at the file **as it was when the error was found**, so they will
+not line up with a corrected file.
+
+| Source                                                          | What it says                                                                            | What is actually true                                                                                                                                                                                                                                                                         |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 100-101 | `0011` reads Vault "at apply time", so the secrets must exist before the migrations run | `0011` only defines `invoke_cron_endpoint`, which reads Vault when **called** (lines 38-42). The file's own header says "read at run time" (lines 10-11). The stated ordering is unnecessary                                                                                                  |
+| `GO-LIVE.md` 235-237                                            | Section 4.1 of the runbook calls the secrets `app_url` and `cron_secret`                | **Applied 5 Aug 2026.** The runbook was corrected to `dayflow_app_url` / `dayflow_cron_secret` in its version 0.1.1, and `GO-LIVE.md` section 5 already recorded that as closed - so section 1.6 was contradicting its own section 5. It now states the names plainly                         |
+| `HANDOFF.md` 255                                                | `/api/reports/generate` depends on `0014`                                               | **Applied 5 Aug 2026.** It does not. That route omits the user id, taking the `get_period_facts` branch from `0010` (`src/lib/ai/report.ts` 56-63). `/api/cron/daily-report` passes a user id and is what needs `get_period_facts_for_user` from `0014`                                       |
+| `README.md` 218-225, 229-244                                    | Run `0001` through `0013`, "thirteen files"; the table stops at `0014`                  | There are fifteen migrations, `0001` through `0015`                                                                                                                                                                                                                                           |
+| `README.md` 400-407, runbook 126                                | "Push this repository to GitHub", "import the repository"                               | **Now partly stale.** A portable MinGit was installed and the tree committed as `f54864f` on 4 Aug 2026, so `.git` exists and has history. There is still no configured remote and nothing has been pushed. Step 7 remains the procedure                                                      |
+| `scripts/build-all-migrations.mjs` 11                           | `npm run db:bundle:check` "is what CI runs"                                             | **Corrected in the script, still true of CI.** The header comment now says nothing runs it, and `HANDOFF.md` no longer repeats the claim. `.github/workflows/ci.yml` still has no such step, so the check happens only when somebody remembers                                                |
+| `GO-LIVE.md` 429-436, 502-503, 621-622                          | `curl -i -X POST ...`, `date +%Y-%m-%d`, `grep`                                         | **Applied 5 Aug 2026.** Bash. In PowerShell 5.1 `curl` is an alias for `Invoke-WebRequest` and rejects those flags. Each snippet in `GO-LIVE.md` now carries a note pointing at the PowerShell equivalent here, in steps 32, 43 and 27 respectively                                           |
+| `GO-LIVE.md` 139, 159-160                                       | The redirect target comes from `auth-form.tsx` and `reset-password-form.tsx`            | **Applied 5 Aug 2026.** Both redirect strings are in `src/features/auth/auth-operations.ts` lines 33 and 45. Those form files exist but the calls were moved out of them so the Supabase client could load lazily                                                                             |
+| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 121-122 | Configure redirect URLs "including `/auth/callback`"                                    | Insufficient on its own. Without the `/auth/callback**` wildcard entry, password reset silently lands on the landing page. `GO-LIVE.md` 133-144 explains it; the runbook does not mention it                                                                                                  |
+| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 116-117 | `supabase db push` "includes `0012` and `0014`"                                         | Does not mention `0015`, which is also pending and which is what makes account deletion possible at all                                                                                                                                                                                       |
+| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 43-53   | The CI job table                                                                        | Omits the `audit` job that `.github/workflows/ci.yml` lines 76-102 actually defines                                                                                                                                                                                                           |
+| `docs/05-engineering/32-environment-and-configuration.md` 141   | Supabase Vault holds "`CRON_SECRET`"                                                    | It holds two secrets. `dayflow_app_url` is missing from that table, and it is the one that silently stops reminders                                                                                                                                                                           |
+| `README.md` 36-37                                               | 107 tests across 6 files; largest route 221 kB                                          | **Resolved 5 Aug 2026 by running the suite.** Both figures were stale, and so were the 142/8 and 317/14 counts that replaced them in turn. The measured state is **318 tests across 14 files**, and the largest route is `/dashboard` at 204 kB. `README.md` and `HANDOFF.md` now both say so |
+| `README.md` 324                                                 | Links to `middleware.ts` at the repository root                                         | The file is `src/middleware.ts`. The root copy was removed because Next.js only loads middleware beside `app/` (`HANDOFF.md` 216-228). The link is dead                                                                                                                                       |
+| `README.md` 387                                                 | Realtime is disabled under **Project Settings → API**                                   | Unverified and probably stale. Publication membership is what `0012` manages; the dashboard control for it is generally under **Database**. Step 37 says to check both                                                                                                                        |
 
 Two further gaps that are not errors but that a human following the existing documents would fall
 into:
@@ -1699,28 +1812,36 @@ none to the Supabase project or to Vercel, so:
   mismatched would pass the build and fail at send time.
 - Whether the free Supabase plan figures in `GO-LIVE.md` section 2 are still current. That section
   says to confirm them against Supabase's pricing page, and I did not.
-- Which of `README.md` and `HANDOFF.md` is right about the test count and the largest route size. I
-  did not run the suite or a build.
+- ~~Which of `README.md` and `HANDOFF.md` is right about the test count and the largest route
+  size.~~ Settled on 5 Aug 2026 by running both: 318 tests across 14 files, and `/dashboard` at
+  204 kB is the largest route. Both documents now agree with the measurement.
 
 **Commands I wrote but did not execute.** The `Invoke-WebRequest` snippets in steps 11, 27 and 32,
 and the `Set-Clipboard` and length-check snippets in steps 5 and 6. They are ordinary PowerShell 5.1
 and I chose the forms that work on 5.1 specifically - `-UseBasicParsing` because 5.1 otherwise uses
 the Internet Explorer engine, and `try`/`catch` around the 401 case because 5.1 has no
-`-SkipHttpErrorCheck`. But treat the exact output shape as untested. I also did not run `next build`,
-`prettier --check` on the whole repository beyond this file, or the Vitest suite.
+`-SkipHttpErrorCheck`. But treat the exact output shape as untested. The same applies to the
+`Invoke-WebRequest` snippet added to step 42 on 5 Aug 2026.
+
+`next build`, `prettier --check` over the whole repository, and the Vitest suite were all run on
+5 Aug 2026 and all pass; that gap is closed.
 
 **The `net._http_response` table name in step 32.** `GO-LIVE.md` lines 422-424 hedges on this
 deliberately, saying it is `net._http_response` "on current versions". If the query errors, list the
 `net` schema rather than concluding the response history is unavailable.
 
-**Step 42 describes nothing.** The data export and account deletion interface do not exist yet, so
-that step is a marker and a list of what to check, not a procedure. Anything more specific would be
-invented.
+**Step 42 is written from the code, not from a run.** The data export and account deletion
+interface now exist and step 42 is a real procedure, but nobody has executed it: no export has been
+taken from a deployed instance and `delete_account()` has never been called against a real row,
+because `0015` is not applied to the live project. The unit suites cover the serialisers, the
+paging, the owner filter, the confirmation phrase and the error mapping. They do not cover the
+browser download, the streaming response, or the cascade. Step 42 says this itself.
 
 ---
 
 ## Change History
 
-| Version | Date       | Author | Change                                                                                             |
-| ------- | ---------- | ------ | -------------------------------------------------------------------------------------------------- |
-| 0.1.0   | 2026-08-04 | Agent  | Initial draft. 48 ordered steps derived from `GO-LIVE.md`, document 33, `HANDOFF.md` and the code. |
+| Version | Date       | Author | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------- | ---------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0.1.0   | 2026-08-04 | Agent  | Initial draft. 48 ordered steps derived from `GO-LIVE.md`, document 33, `HANDOFF.md` and the code.                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 0.2.0   | 2026-08-05 | Agent  | Replaced the step 42 placeholder with a verification procedure for the data export and account deletion, which now exist; the step count is unchanged and no step was renumbered. Recorded in section 4 which of the listed documentation errors have since been corrected, and settled the test count by running the suite: 318 across 14 files. Section 6 updated - the build, format and test gaps are closed; the export and deletion procedure is written from the code and has never been executed. |

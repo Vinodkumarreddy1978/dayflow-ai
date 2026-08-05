@@ -78,10 +78,12 @@ jobs:
         # input it needs is the route table the build already printed, and a
         # separate job would have to repeat the build to get it.
         #
-        # Three routes are over budget today and are named, with ceilings, in the
-        # script. They fail this step if they grow, and any other route fails it on
-        # crossing 200 kB. ADR-015 records why they are tolerated rather than
-        # either ignored or allowed to turn every pull request red.
+        # Three routes carry the Supabase client stack and are over budget for a
+        # reason no pull request can fix. They are named, with ceilings, in the
+        # script: they fail this step if they grow, and every other route fails it
+        # on crossing 200 kB. ADR-015 records why those three are tolerated rather
+        # than either ignored or left to turn every pull request red - and why a
+        # route that goes over on its own feature work is not added to the list.
         run: npm run budget
 
       - name: Upload build output on failure

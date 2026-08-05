@@ -229,26 +229,15 @@ function sanitiseObject(
   return result;
 }
 
-function sanitise(value: unknown, depth: number, seen: WeakSet<object>): unknown {
-  switch (typeof value) {
-    case "undefined":
-      return null;
-    case "string":
-      return text(value);
-    case "number":
-      // NaN and Infinity serialise as null, which reads as an absent field.
-      return Number.isFinite(value) ? value : String(value);
-    case "boolean":
-      return value;
-    case "bigint":
-      return `${value}`;
-    case "function":
-      return "[function]";
-    case "symbol":
-      return value.toString();
-  }
-
-  if (value === null) return null;
+/**
+ * The values that are held by reference, and so can be cyclic or unbounded.
+ *
+ * Separate from `sanitise` because `object` has to be arrived at by a positive
+ * check: subtracting each primitive `typeof` from `unknown` leaves `{} |
+ * undefined` rather than `object`, which neither the `WeakSet` nor
+ * `Object.entries` accepts.
+ */
+function sanitiseReference(value: object, depth: number, seen: WeakSet<object>): unknown {
   if (value instanceof Date) return value.toISOString();
   if (value instanceof Error) return sanitiseError(value, depth, seen);
 
@@ -272,6 +261,30 @@ function sanitise(value: unknown, depth: number, seen: WeakSet<object>): unknown
   return sanitiseObject(value, depth, seen);
 }
 
+function sanitise(value: unknown, depth: number, seen: WeakSet<object>): unknown {
+  switch (typeof value) {
+    case "undefined":
+      return null;
+    case "string":
+      return text(value);
+    case "number":
+      // NaN and Infinity serialise as null, which reads as an absent field.
+      return Number.isFinite(value) ? value : String(value);
+    case "boolean":
+      return value;
+    case "bigint":
+      return `${value}`;
+    case "function":
+      return "[function]";
+    case "symbol":
+      return value.toString();
+    // `typeof null` is "object", so null reaches this branch rather than the
+    // "undefined" one above.
+    case "object":
+      return value === null ? null : sanitiseReference(value, depth, seen);
+  }
+}
+
 function threshold(): number {
   const configured = process.env.LOG_LEVEL?.toLowerCase();
 
@@ -288,7 +301,8 @@ function stdout(line: string): void {
 }
 
 function emit(level: LogLevel, line: string): void {
-  const sink = level === "error" ? console.error : level === "warn" ? console.warn : stdout;
+  const sink =
+    level === "error" ? console.error : level === "warn" ? console.warn : stdout;
   sink(line);
 }
 

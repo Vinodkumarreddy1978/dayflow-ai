@@ -20,22 +20,22 @@ because nobody can tell whether the circumstances that justified it still hold.
 Format: Architecture Decision Records, numbered sequentially, never renumbered. A
 reversed decision keeps its record and gains a superseding one.
 
-| ID      | Decision                                          | Status   |
-| ------- | ------------------------------------------------- | -------- |
-| ADR-001 | Cloud persistence instead of local storage        | Accepted |
-| ADR-002 | Next.js full stack instead of Spring Boot + React | Accepted |
-| ADR-003 | Supabase as the backend platform                  | Accepted |
-| ADR-004 | Business rules enforced in the database           | Accepted |
-| ADR-005 | Pin Next.js 15 rather than adopt 16               | Accepted |
-| ADR-006 | Pin TypeScript 5.9 rather than adopt 7.0          | Accepted |
-| ADR-007 | No third-party component library                  | Accepted |
-| ADR-008 | pg_cron for frequent jobs, Vercel Cron for daily  | Accepted |
-| ADR-009 | The queue refuses rather than warns               | Accepted |
-| ADR-010 | Overnight Moments split at midnight               | Accepted |
-| ADR-011 | Statistics are deterministic; AI only narrates    | Accepted |
-| ADR-012 | Installable PWA instead of native applications    | Accepted |
-| ADR-013 | Auto-closed is a distinct status                  | Accepted |
-| ADR-014 | Account deletion by security definer function     | Accepted |
+| ID      | Decision                                           | Status   |
+| ------- | -------------------------------------------------- | -------- |
+| ADR-001 | Cloud persistence instead of local storage         | Accepted |
+| ADR-002 | Next.js full stack instead of Spring Boot + React  | Accepted |
+| ADR-003 | Supabase as the backend platform                   | Accepted |
+| ADR-004 | Business rules enforced in the database            | Accepted |
+| ADR-005 | Pin Next.js 15 rather than adopt 16                | Accepted |
+| ADR-006 | Pin TypeScript 5.9 rather than adopt 7.0           | Accepted |
+| ADR-007 | No third-party component library                   | Accepted |
+| ADR-008 | pg_cron for frequent jobs, Vercel Cron for daily   | Accepted |
+| ADR-009 | The queue refuses rather than warns                | Accepted |
+| ADR-010 | Overnight Moments split at midnight                | Accepted |
+| ADR-011 | Statistics are deterministic; AI only narrates     | Accepted |
+| ADR-012 | Installable PWA instead of native applications     | Accepted |
+| ADR-013 | Auto-closed is a distinct status                   | Accepted |
+| ADR-014 | Account deletion by security definer function      | Accepted |
 | ADR-015 | The bundle budget gate names the routes it excuses | Accepted |
 
 ---
@@ -618,13 +618,13 @@ nobody, and section 3 of
 said so in as many words.
 
 Wiring the script in as written would have failed on its first run. `/insights` was 217 kB
-because it imported a Zod schema as a runtime value rather than as a type, which is fixed
-in the same change and takes it to 199 kB. Three routes remain over: `/dashboard`,
-`/calendar/[date]` and `/goals`, between 202 and 204 kB. They are over for one shared
-reason - each pulls the Supabase browser client, with its auth and realtime code, into
-First Load JS - and reducing it means changing how authenticated routes read data, which
-is architectural work with its own record to write. It is not something a contributor can
-do in passing on the way to an unrelated change.
+because it imported a Zod schema as a runtime value rather than as a type, which is fixed in
+the same change and takes it to 200 kB. Three routes remain over: `/dashboard` at 204 kB,
+`/calendar/[date]` at 203 kB and `/goals` at 202 kB. They are over for one shared reason -
+each pulls the Supabase browser client, with its auth and realtime code, into First Load JS -
+and reducing it means changing how authenticated routes read data, which is architectural
+work with its own record to write. It is not something a contributor can do in passing on
+the way to an unrelated change.
 
 This repository's CI has never executed. A gate that is red on its first run, and on every
 pull request after it, for a reason no pull request can address, does not get satisfied. It
@@ -635,21 +635,31 @@ of every other job in the workflow.
 
 The check runs as a step in the existing `verify` job, immediately after the type check,
 parsing the route table that the build step has already captured to `build-output.txt`. It
-fails on any route above 200 kB, with the exception of three routes named individually in
-an `ALLOWANCES` list in the script, each carrying as its ceiling the size it had on the day
-the gate was added.
+fails on any route above 200 kB, with the exception of three routes named individually in an
+`ALLOWANCES` list in the script, each carrying as its ceiling the size it had on the day the
+gate was added, plus one kB.
 
 Four things therefore fail the build: a new route over budget, an existing route crossing
 the budget, one of the three named routes growing past its recorded size, and an allowance
 that is no longer needed - its route now comfortably within budget, or gone from the table
 altogether.
 
+**Only these three are exempt, and only because of the Supabase baseline.** A route that
+goes over budget through its own feature work is not added to the list; it is fixed by
+deferring what it just acquired, as the auth screens defer the Supabase client and
+`src/features/analytics` defers Recharts. `/settings` is the live example: it was 199 kB when
+the diagnosis in `HANDOFF.md` was written and measured 202 to 203 kB, moving between builds,
+while the export and account-deletion controls were being added. It is deliberately not
+listed. This step will fail on it until that work brings it back under 200 kB, which is the
+gate reporting a regression at the moment it is introduced - the entire purpose of adding it -
+rather than a defect in the gate.
+
 ### Reasoning
 
 **The list is a debt register, not a second budget.** The budget stays at 200 kB, in one
 place, for every route. What the allowances record is that three named routes are known to
 breach it, by how much, and since when. That is a different statement from "the budget is
-206 kB for `/dashboard`", and the distinction is the whole reason the entries carry route
+205 kB for `/dashboard`", and the distinction is the whole reason the entries carry route
 names and ceilings rather than the budget being raised.
 
 **Ceilings, not bare names.** An exemption that only records membership lets `/dashboard`
@@ -664,18 +674,25 @@ improved is mildly annoying and the fix is deleting two lines; the alternative i
 allow-list that quietly becomes the standard, which is the outcome this record exists to
 prevent.
 
-**Margins, because the check cannot be tried before it runs.** The ceilings carry one to
-two kB above the measured figure, and an allowance is called obsolete only once its route
-is at least 2 kB under budget. These sizes move by a few hundred bytes between platforms
-and Node versions - the measurements here were taken on Windows with Node 24, and CI runs
-Linux with Node 20 - and a gate that fails on a rounding difference teaches people to
-distrust the gate rather than to read it.
+**Margins, because the check cannot be tried before it runs.** Each ceiling is one kB above
+the measured figure, which is the resolution of the measurement rather than headroom: above
+100 kB `next build` prints First Load JS to the nearest kB, so a route reported as 203 kB is
+somewhere between 202.5 and 203.4 and another platform may legitimately print 204. An
+allowance is called obsolete only once its route is at least 2 kB inside the budget, for the
+same reason. The figures here were measured on Windows with Node 24; CI runs Linux with
+Node 20.
 
 ### Consequences
 
 - DF-CD-004 is enforced for every route except three, which are enumerated in code where a
   reader can find them, rather than in prose where they were previously not recorded at all.
 - The three known breaches now have a home that forces a decision when they are fixed.
+- `/insights` and `/categories` both sit at exactly 200 kB, which passes. There is
+  consequently almost no headroom anywhere in the authenticated interface: the next component
+  either route acquires will fail this step. That is the gate working, but it should be
+  expected rather than come as a surprise.
+- The step is red today, on `/settings`, for the reason given above. It becomes green when
+  that route comes back under budget.
 - The budget number is still stated once, in
   [22 - Accessibility and Responsive Standards](../03-ux/22-accessibility-and-responsive-standards.md),
   and copied once, in the script. Changing it remains a decision to be recorded here, not

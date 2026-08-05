@@ -49,7 +49,10 @@ const KINDS = [
 const ACCEPTED: [name: string, value: unknown][] = [
   ["a report with one insight", content()],
   ["no insights and no recommendations", content({ insights: [], recommendations: [] })],
-  ["the maximum five recommendations", content({ recommendations: ["a", "b", "c", "d", "e"] })],
+  [
+    "the maximum five recommendations",
+    content({ recommendations: ["a", "b", "c", "d", "e"] }),
+  ],
   ["a summary at the 1200 character limit", content({ summary: "s".repeat(1200) })],
   ["a title at the 120 character limit", withInsight({ title: "t".repeat(120) })],
   ["a detail at the 600 character limit", withInsight({ detail: "d".repeat(600) })],
@@ -68,12 +71,10 @@ const ACCEPTED: [name: string, value: unknown][] = [
   ],
   ["unknown keys, which the schema strips rather than refuses", content({ extra: 1 })],
   ["unknown keys inside an insight", withInsight({ extra: 1 })],
-  ...KINDS.map(
-    (kind): [name: string, value: unknown] => [
-      `the ${kind} insight kind`,
-      withInsight({ kind }),
-    ],
-  ),
+  ...KINDS.map((kind): [name: string, value: unknown] => [
+    `the ${kind} insight kind`,
+    withInsight({ kind }),
+  ]),
 ];
 
 const REJECTED: [name: string, value: unknown][] = [
@@ -100,7 +101,10 @@ const REJECTED: [name: string, value: unknown][] = [
   ["an insight id that is not a string", withInsight({ id: 7 })],
   ["a missing insight kind", withInsight({ kind: undefined })],
   ["an insight kind outside the enum", withInsight({ kind: "insight" })],
-  ["an insight kind taken from the prototype chain", withInsight({ kind: "constructor" })],
+  [
+    "an insight kind taken from the prototype chain",
+    withInsight({ kind: "constructor" }),
+  ],
   ["an empty insight title", withInsight({ title: "" })],
   ["a title one character over the limit", withInsight({ title: "t".repeat(121) })],
   ["an empty insight detail", withInsight({ detail: "" })],

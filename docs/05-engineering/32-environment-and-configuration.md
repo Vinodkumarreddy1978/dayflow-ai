@@ -3,7 +3,7 @@
 | Field        | Value      |
 | ------------ | ---------- |
 | Document ID  | DF-DOC-032 |
-| Version      | 0.1.0      |
+| Version      | 0.2.0      |
 | Status       | Draft      |
 | Owner        | Founder    |
 | Last updated | 2026-08-04 |
@@ -134,12 +134,27 @@ curl -X POST http://localhost:3000/api/cron/reminders \
 
 ## 6. Storing secrets
 
-| Location                | Holds                                                               |
-| ----------------------- | ------------------------------------------------------------------- |
-| `.env.local`            | Local values. Git-ignored, never committed.                         |
-| Vercel project settings | Preview and production values, marked sensitive.                    |
-| Supabase Vault          | `CRON_SECRET`, so migrations can reference it without embedding it. |
-| GitHub Actions secrets  | CI values only.                                                     |
+| Location                | Holds                                                                |
+| ----------------------- | -------------------------------------------------------------------- |
+| `.env.local`            | Local values. Git-ignored, never committed.                          |
+| Vercel project settings | Preview and production values, marked sensitive.                     |
+| Supabase Vault          | Two secrets, `dayflow_app_url` and `dayflow_cron_secret`. See below. |
+| GitHub Actions secrets  | CI values only.                                                      |
+
+Supabase Vault holds exactly two secrets, and the names are load-bearing:
+`public.invoke_cron_endpoint` in `0011_scheduled_jobs.sql` looks them up by name, and a
+secret stored under any other name reads as absent rather than as an error.
+
+| Vault secret          | Value                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------- |
+| `dayflow_app_url`     | The deployed origin, no trailing slash - the function appends a path to it.           |
+| `dayflow_cron_secret` | The same value as `CRON_SECRET` in Vercel. A mismatch means every scheduled job 401s. |
+
+They are in Vault so that `pg_cron`, which runs inside the database, can reach the
+application without either value being embedded in a committed migration. Both are read when
+the function is called, not when the migration is applied. Section 4.1 of
+[33 - CI/CD and Deployment Runbook](33-cicd-and-deployment-runbook.md) covers what that means
+for deployment ordering.
 
 | ID         | Requirement                                                            |
 | ---------- | ---------------------------------------------------------------------- |
@@ -168,6 +183,7 @@ between users.
 
 ## Change History
 
-| Version | Date       | Author  | Change         |
-| ------- | ---------- | ------- | -------------- |
-| 0.1.0   | 2026-08-04 | Founder | Initial draft. |
+| Version | Date       | Author  | Change                                                                                                                                                                                                                                                              |
+| ------- | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0.1.0   | 2026-08-04 | Founder | Initial draft.                                                                                                                                                                                                                                                      |
+| 0.2.0   | 2026-08-04 | Founder | Section 6 corrected. Supabase Vault holds `dayflow_app_url` and `dayflow_cron_secret`, not `CRON_SECRET`; the previous entry named a secret that does not exist under that name in Vault and omitted the app URL entirely. Added the two names and what each holds. |

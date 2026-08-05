@@ -161,12 +161,12 @@ cannot substantiate.
 
 **The export.** DF-PRV-020, DF-SET-022.
 
-| Piece                                                        | Where                                                                                |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| Table manifest, paging, JSON and CSV serialisation           | `src/features/settings/account-export.ts`                                            |
-| The table names the interface offers                         | `src/features/settings/account-export-tables.ts`                                     |
-| The route that streams it                                    | `src/app/api/export/route.ts`                                                        |
-| The controls and the download                                | `src/features/settings/data-export-card.tsx`, `use-account-export.ts`                |
+| Piece                                              | Where                                                                 |
+| -------------------------------------------------- | --------------------------------------------------------------------- |
+| Table manifest, paging, JSON and CSV serialisation | `src/features/settings/account-export.ts`                             |
+| The table names the interface offers               | `src/features/settings/account-export-tables.ts`                      |
+| The route that streams it                          | `src/app/api/export/route.ts`                                         |
+| The controls and the download                      | `src/features/settings/data-export-card.tsx`, `use-account-export.ts` |
 
 `GET /api/export?format=json` answers with one document holding every row of all ten tables
 that carry user data - `profiles`, `settings`, `parent_categories`, `categories`, `moments`,
@@ -193,12 +193,12 @@ than merely present:
 
 **Deletion.** DF-PRV-021, DF-PRV-022, DF-PRV-023, DF-SET-023, DF-SET-024, DF-SET-025.
 
-| Piece                                        | Where                                            |
-| -------------------------------------------- | ------------------------------------------------ |
-| The destruction itself                       | `public.delete_account()`, migration `0015`      |
-| Typed confirmation and failure interpretation | `src/features/settings/delete-account.ts`        |
-| The dialog                                   | `src/features/settings/delete-account-card.tsx`  |
-| The call, the sign-out and the redirect      | `src/features/settings/use-delete-account.ts`    |
+| Piece                                         | Where                                           |
+| --------------------------------------------- | ----------------------------------------------- |
+| The destruction itself                        | `public.delete_account()`, migration `0015`     |
+| Typed confirmation and failure interpretation | `src/features/settings/delete-account.ts`       |
+| The dialog                                    | `src/features/settings/delete-account-card.tsx` |
+| The call, the sign-out and the redirect       | `src/features/settings/use-delete-account.ts`   |
 
 The dialog states what is destroyed item by item, requires the phrase `delete my account` to
 be typed before the control will act, and offers the export in the same dialog per DF-PRV-023.
@@ -275,9 +275,9 @@ exposed and what to do, notify any applicable regulator, remediate, and document
 
 ## Change History
 
-| Version | Date       | Author  | Change                                                                                                                                                                      |
-| ------- | ---------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0.1.0   | 2026-08-04 | Founder | Initial draft.                                                                                                                                                              |
-| 0.2.0   | 2026-08-04 | Founder | Added section 7.1 recording that export and account deletion are specified but not yet implemented.                                                                         |
-| 0.3.0   | 2026-08-04 | Founder | Rewrote section 7.1: the deletion design question is settled by ADR-014 and `public.delete_account()` exists; the export and the confirmation interface remain outstanding. |
+| Version | Date       | Author  | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------- | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0.1.0   | 2026-08-04 | Founder | Initial draft.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 0.2.0   | 2026-08-04 | Founder | Added section 7.1 recording that export and account deletion are specified but not yet implemented.                                                                                                                                                                                                                                                                                                                                                     |
+| 0.3.0   | 2026-08-04 | Founder | Rewrote section 7.1: the deletion design question is settled by ADR-014 and `public.delete_account()` exists; the export and the confirmation interface remain outstanding.                                                                                                                                                                                                                                                                             |
 | 0.4.0   | 2026-08-04 | Founder | Rewrote section 7.1 again: the export and the deletion interface are built, so the section now records what exists, by file, the exact scope of the export, what is verified against tests rather than against a live project, and the one thing still outstanding - applying `0015`. Minor rather than major because the section records implementation status and no approved requirement changed; the same reasoning was applied at 0.2.0 and 0.3.0. |

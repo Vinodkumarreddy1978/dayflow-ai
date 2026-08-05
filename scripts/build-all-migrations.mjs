@@ -2,13 +2,15 @@
  * Rebuilds supabase/all-migrations.sql from supabase/migrations/*.sql.
  *
  * The bundle exists for people applying the schema through the Supabase dashboard
- * SQL editor, where pasting one file beats pasting fourteen in the right order.
+ * SQL editor, where pasting one file beats pasting fifteen in the right order.
  * It was previously maintained by hand, which meant a new migration could be
  * added and the bundle left a version behind - and the mistake is invisible until
  * someone provisions a fresh project from the stale copy.
  *
  * Run with `npm run db:bundle`. `npm run db:bundle:check` fails if the committed
- * bundle no longer matches the migrations, which is what CI runs.
+ * bundle no longer matches the migrations. Nothing runs it for you: there is no
+ * such step in .github/workflows/ci.yml, so until one is added the check only
+ * happens when somebody remembers to run it after adding a migration.
  */
 
 import { readdir, readFile, writeFile } from "node:fs/promises";

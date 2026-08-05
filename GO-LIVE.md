@@ -1,7 +1,7 @@
 # Going live
 
-Written 4 Aug 2026. The operator's checklist for moving DayFlow AI from a laptop to a
-live deployment, and for keeping it running afterwards.
+Written 4 Aug 2026, corrected 5 Aug 2026. The operator's checklist for moving DayFlow AI
+from a laptop to a live deployment, and for keeping it running afterwards.
 
 This is not a summary of
 [docs/05-engineering/33-cicd-and-deployment-runbook.md](docs/05-engineering/33-cicd-and-deployment-runbook.md).
@@ -136,7 +136,8 @@ Under **Authentication → URL Configuration**:
 
 The second entry is not redundant, and this is worth understanding because the failure is
 completely silent. Password reset returns the user to
-`/auth/callback?next=/update-password` - see `src/features/auth/reset-password-form.tsx`.
+`/auth/callback?next=/update-password` - see `src/features/auth/auth-operations.ts` line 45,
+which is where that string is built.
 An allow-list entry without a wildcard is matched against the whole URL including its
 query string, so `/auth/callback` does not match `/auth/callback?next=...`. Supabase then
 discards the requested redirect, sends the user to the Site URL instead, and they land on
@@ -156,9 +157,13 @@ secret is section 3 of
 Three specific traps in this repository:
 
 **`NEXT_PUBLIC_APP_URL` must be the deployed origin.** It is what
-`src/features/auth/auth-form.tsx` and `src/features/auth/reset-password-form.tsx` give
-Supabase as the redirect target, so it ends up inside every confirmation and password reset
-email. The Zod schema in `src/lib/env.ts` requires it, rejects anything that is not an
+`src/features/auth/auth-operations.ts` gives Supabase as the redirect target - line 33 for
+the sign-up confirmation and line 45 for the password reset - so it ends up inside every
+confirmation and password reset email. Those two calls used to sit inline in
+`auth-form.tsx` and `reset-password-form.tsx`; they were moved into `auth-operations.ts` so
+the four auth screens could load the Supabase client lazily and stay inside the bundle
+budget, and the forms no longer contain the strings. The Zod schema in `src/lib/env.ts`
+requires the variable, rejects anything that is not an
 absolute `http` or `https` origin, and rejects a trailing slash - because redirect targets
 are built by appending a path, and `https://example.com/` would produce
 `https://example.com//auth/callback`. All three failures are build failures naming the
@@ -232,9 +237,12 @@ Two details that cause real failures:
   stop - see section 7.1 of
   [docs/06-operations/36-observability-and-incident-runbook.md](docs/06-operations/36-observability-and-incident-runbook.md).
 
-Note that section 4.1 of the deployment runbook calls these secrets `app_url` and
-`cron_secret`. The migration reads `dayflow_app_url` and `dayflow_cron_secret`. The
-migration is what actually runs; use those names.
+The names are `dayflow_app_url` and `dayflow_cron_secret`, exactly. A secret stored under
+any other name reads as absent, and `invoke_cron_endpoint` then returns null and logs a
+warning rather than failing loudly. Section 4.1 of the deployment runbook briefly called
+them `app_url` and `cron_secret`; that was corrected in its v0.1.1 and both documents now
+agree with `supabase/migrations/0011_scheduled_jobs.sql`, which is the thing that actually
+reads them.
 
 ### 1.7 Confirm row level security on every table - blocking
 
@@ -435,6 +443,12 @@ curl -i -X POST https://<your-domain>/api/cron/reminders \
   -H "Authorization: Bearer <your CRON_SECRET>"
 ```
 
+> **These are bash.** In Windows PowerShell 5.1 `curl` is an alias for `Invoke-WebRequest`
+> and rejects `-i` and `-X`, so the two lines above fail with an argument error rather than
+> doing anything. Use the `Invoke-WebRequest` equivalents in **step 32** of
+> [GO-LIVE-STEPS.md](GO-LIVE-STEPS.md), which are written for that shell and include the
+> `try`/`catch` a non-2xx response needs there.
+
 Finally check the Vercel side. `/api/cron/daily-report` is invoked by Vercel Cron, not by
 `pg_cron`; look for its scheduled job in the Vercel project dashboard and check the
 function logs the morning after your first deployment, remembering the schedule is UTC and
@@ -503,15 +517,22 @@ is the one failure this product cannot recover from.
 supabase db dump --linked -f "dayflow-$(date +%Y-%m-%d).sql"
 ```
 
+> **This is bash.** `$(date +%Y-%m-%d)` is not a PowerShell construct and expands to
+> nothing useful there. The PowerShell form, using `Get-Date -Format`, is in **step 43** of
+> [GO-LIVE-STEPS.md](GO-LIVE-STEPS.md).
+
 Store it somewhere outside Supabase and outside Vercel, encrypted. The point of an
 off-platform copy is the scenario where the platform itself is the problem: an outage, a
 billing failure, an account suspension. A backup that lives inside the thing that failed
 is not a backup.
 
-Note that the in-application export described in section 7 of
+The in-application export described in section 7 of
 [docs/06-operations/35-privacy-and-data-protection.md](docs/06-operations/35-privacy-and-data-protection.md)
-is specified but not yet built - there is no export button in `src/features/settings/`
-today. Until there is, the CLI dump is the export.
+now exists, in `src/features/settings/data-export-card.tsx` and `/api/export`. It does not
+replace this dump and is not a backup: it reads through the user's own session, so it
+returns one account's rows and nothing of the schema, the functions, the triggers or the row
+level security policies. Restoring a project from it is not possible. The CLI dump remains
+the recovery artefact; the in-application export is the user's copy of their own data.
 
 Once a quarter, restore one of those dumps into a scratch project and sign in against it.
 An untested backup is a hypothesis. The drill is described in section 5 of document 37,
@@ -587,9 +608,9 @@ are the kind of setting that gets turned off during debugging and never turned b
 ## 5. Where the documents and the code disagree
 
 Found while checking this checklist against the repository. None of these blocked a
-deployment, but each was a place where following a document would mislead you. Six of the
-seven have since been closed - four by changing the code to do what the document said, two
-by correcting the document.
+deployment, but each was a place where following a document would mislead you. All seven
+have since been closed - five by changing the code to do what the document said, two by
+correcting the document.
 
 | Source                  | Claim                                     | Resolution                                                             |
 | ----------------------- | ----------------------------------------- | ---------------------------------------------------------------------- |
@@ -599,13 +620,21 @@ by correcting the document.
 | Doc 33 §4.1             | Vault secrets `app_url`, `cron_secret`    | Closed. Document corrected to `dayflow_app_url`, `dayflow_cron_secret` |
 | Doc 37 §3, layer 2      | A daily automated Supabase backup         | Closed. Document now records that layers 1 and 2 are paid features     |
 | `HANDOFF.md` §1         | 13 migrations; cron routes and CI unbuilt | Closed. Rewritten to describe the current state                        |
-| Doc 35 §7, DF-PRV-020   | Export and deletion available in Settings | **Open.** Neither is implemented; doc 35 §7.1 now says so              |
+| Doc 35 §7, DF-PRV-020   | Export and deletion available in Settings | Closed. Both are now built; see below                                  |
 
-The remaining one is the only one that is a missing feature rather than a missing header,
-and it is not purely a matter of finding the time. Account deletion has to remove the
-`auth.users` row, which means either the service role key - confined by an ESLint rule to
-`src/app/api/cron/` on purpose - or a `security definer` function that deletes the caller's
-own record. That choice needs an ADR before any code. See doc 35 §7.1.
+The last of those was the only one that was a missing feature rather than a missing header.
+Account deletion has to remove the `auth.users` row, which means either the service role
+key - confined by an ESLint rule to `src/app/api/cron/` on purpose - or a `security definer`
+function that deletes the caller's own record. ADR-014 chose the function, `0015` implements
+it as `public.delete_account()`, and the interface is now in `src/features/settings/` with
+`/api/export` behind the export half.
+
+**Built is not verified.** Neither control has been exercised against a database with `0015`
+applied, because the live project is still on `0013`. Until it is, the delete dialog will
+report the feature as unavailable and delete nothing - which is the correct behaviour, and
+also means the destructive path is the one part of this application with no evidence behind
+it at all. Step 42 of [GO-LIVE-STEPS.md](GO-LIVE-STEPS.md) is the procedure, and it says to
+use a throwaway account.
 
 **The Content Security Policy is a damage limit, not a wall.** `script-src` permits
 `'unsafe-inline'`, because the App Router serves its hydration payload as inline script
@@ -621,6 +650,10 @@ policy at all:
 ```bash
 curl -sI https://<your-domain> | grep -iE 'content-security-policy|strict-transport'
 ```
+
+> **This is bash.** Neither `curl -sI` nor `grep` works in Windows PowerShell 5.1. Read the
+> headers off an `Invoke-WebRequest` response instead, as **step 27** of
+> [GO-LIVE-STEPS.md](GO-LIVE-STEPS.md) does.
 
 Vercel may also send HSTS for its own domains. Check again if you attach a custom domain.
 

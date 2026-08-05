@@ -10,6 +10,12 @@ build/
 next-env.d.ts
 # captured `next build` output, parsed by scripts/check-bundle-budget.mjs
 build-output.txt
+# ad-hoc build and dev-server captures; transient, and dev-server output records the LAN address
+build-run*.txt
+server-out.txt
+server-err.txt
+smoke.err
+smoke.out
 
 # testing
 coverage/

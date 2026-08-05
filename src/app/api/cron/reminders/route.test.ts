@@ -293,6 +293,39 @@ describe("a run that sends", () => {
     });
   });
 
+  it("records a failed post-sweep write, which decides whether the job is idempotent", async () => {
+    // If `last_reminder_at` is not written, every user due a reminder gets another
+    // one in ten minutes, and again, while the endpoint keeps answering 200. This
+    // was previously the one failure in the sweep with no symptom at all.
+    let momentsCalls = 0;
+
+    createAdminClient.mockReturnValue({
+      from: (table: string) => {
+        if (table === "moments") {
+          momentsCalls += 1;
+          return momentsCalls === 1
+            ? query({ data: [pendingMoment()], error: null })
+            : query({
+                data: null,
+                error: { code: "40001", message: "could not serialize access" },
+              });
+        }
+
+        if (table === "settings") return query({ data: [settingsRow()], error: null });
+        return query({ data: [], error: null });
+      },
+    });
+
+    const response = await POST(request());
+
+    // The sweep did its work, so the response is unchanged.
+    expect(response.status).toBe(200);
+
+    const logged = contexts(stderr).find((entry) => entry.stage === "mark-reminded");
+    expect(logged?.job).toBe("reminders");
+    expect((logged?.error as Record<string, unknown>).code).toBe("40001");
+  });
+
   it("names the category nowhere in the log, though the notification uses it", async () => {
     sendToAllDevices.mockResolvedValue([{ status: "sent", subscriptionId: "sub-1" }]);
 

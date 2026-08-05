@@ -165,7 +165,8 @@ describe("redaction", () => {
     logger.warn("Push send failed", {
       subscriptionId: "0f9d4b21-0000-0000-0000-000000000003",
       endpoint: "https://fcm.googleapis.com/fcm/send/cX9-token-material",
-      p256dh: "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I",
+      p256dh:
+        "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I",
       auth: "tBHItJI5svbpez7KI4CCXg",
     });
 

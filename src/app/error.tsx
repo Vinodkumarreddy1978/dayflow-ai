@@ -43,8 +43,8 @@ export default function RouteError({
           <h1 className="text-lg font-semibold text-text">Something went wrong.</h1>
 
           <p className="mt-2 text-sm text-text-muted">
-            This screen failed to load. Nothing you have recorded has been changed or
-            lost - the failure is in showing it to you, not in your history.
+            This screen failed to load. Nothing you have recorded has been changed or lost
+            - the failure is in showing it to you, not in your history.
           </p>
 
           <div className="mt-5 flex flex-wrap items-center gap-3">
