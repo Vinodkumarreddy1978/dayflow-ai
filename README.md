@@ -33,7 +33,7 @@ Verified locally on Node 24.19.0 / npm 11.17.0:
 | `npm install`          | 441 packages, no errors                                      |
 | `npm run format:check` | Clean                                                        |
 | `npm run lint`         | Clean                                                        |
-| `npm run test`         | 318 tests across 14 files, all passing (measured 2026-08-05) |
+| `npm run test`         | 332 tests across 14 files, all passing (measured 2026-08-05) |
 | `npm run build`        | 24 routes compiled; see the note on bundle size below        |
 | `npm run typecheck`    | Clean                                                        |
 | `npm run dev`          | Boots; landing and sign-in serve, auth guard works           |

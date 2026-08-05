@@ -50,6 +50,23 @@ const MAX_STACK = 2048;
 const MAX_ARRAY = 20;
 
 /**
+ * A ceiling on how many values one record may serialise at all.
+ *
+ * Cycle detection tracks ancestors rather than everything visited, which is the
+ * only way a sibling reference reads as itself instead of as a cycle. The cost
+ * is that a small graph which shares its children expands on the way out: four
+ * levels of an object whose every key points at the same child is a few hundred
+ * bytes of caller data and millions of values to walk. Depth alone does not
+ * bound that, so the walk gets a budget and stops when it is spent.
+ */
+const MAX_NODES = 1000;
+
+const NODE_LIMIT = "[node limit]";
+
+/** The key under which a truncated collection says what it left out. */
+const OMITTED = "[omitted]";
+
+/**
  * Keys whose value is never logged, matched exactly once case and separators are
  * normalised away - so `userEmail`, `user_email` and `USER_EMAIL` are one entry.
  *
@@ -191,24 +208,55 @@ function text(value: string, limit = MAX_STRING): string {
   return truncate(scrub(value), limit);
 }
 
-function sanitiseError(
-  error: Error,
-  depth: number,
-  seen: WeakSet<object>,
-): Record<string, unknown> {
+/**
+ * The state of one walk over one record.
+ *
+ * `path` is the chain of ancestors of the value being sanitised, not everything
+ * the walk has ever seen: a cycle is an ancestor relationship, and an object
+ * that merely appears twice in sibling positions is two facts about the payload
+ * rather than a loop. `nodes` is the budget MAX_NODES describes.
+ */
+interface Walk {
+  path: WeakSet<object>;
+  nodes: number;
+}
+
+/**
+ * A key as it is emitted.
+ *
+ * A key is caller data too. `isForbiddenKey` decides whether the *value* under a
+ * name is safe to log and can say nothing about the name itself, so a record
+ * keyed by email address - which is what a lookup table of users looks like -
+ * would otherwise print the addresses as field names. The same scrubbing and the
+ * same bound apply as to any other string.
+ */
+function field(key: string): string {
+  // `result["__proto__"] = value` runs Object.prototype's setter instead of
+  // adding a property, so the field would disappear from the line without
+  // saying so - and `JSON.parse` of an upstream response is all it takes to get
+  // an own `__proto__` key. Renamed rather than skipped, for the same reason the
+  // cron collision is reported: a field dropped in silence is the defect.
+  if (key === "__proto__") return "[proto]";
+
+  return text(key);
+}
+
+function sanitiseError(error: Error, depth: number, walk: Walk): Record<string, unknown> {
   const payload: Record<string, unknown> = {
-    name: error.name,
+    name: text(error.name),
     message: text(error.message),
   };
 
   if (typeof error.stack === "string") payload.stack = text(error.stack, MAX_STACK);
-  if (error.cause !== undefined) payload.cause = sanitise(error.cause, depth + 1, seen);
+  if (error.cause !== undefined) payload.cause = sanitise(error.cause, depth + 1, walk);
 
   // Own enumerable properties carry the parts that make a failure reproducible -
   // a Supabase `code`, a push service `statusCode`. DF-OBS-005.
   for (const [key, value] of Object.entries(error)) {
     if (key in payload) continue;
-    payload[key] = isForbiddenKey(key) ? REDACTED : sanitise(value, depth + 1, seen);
+    payload[field(key)] = isForbiddenKey(key)
+      ? REDACTED
+      : sanitise(value, depth + 1, walk);
   }
 
   return payload;
@@ -217,16 +265,102 @@ function sanitiseError(
 function sanitiseObject(
   source: object,
   depth: number,
-  seen: WeakSet<object>,
+  walk: Walk,
 ): Record<string, unknown> {
   const result: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(source)) {
     if (value === undefined) continue;
-    result[key] = isForbiddenKey(key) ? REDACTED : sanitise(value, depth + 1, seen);
+
+    // Breadth is capped here rather than by a key count, because the budget is
+    // what an object with a hundred thousand keys actually exhausts.
+    if (walk.nodes <= 0) {
+      result[OMITTED] = NODE_LIMIT;
+      break;
+    }
+
+    result[field(key)] = isForbiddenKey(key)
+      ? REDACTED
+      : sanitise(value, depth + 1, walk);
   }
 
   return result;
+}
+
+/**
+ * The name a `Map` entry is logged under.
+ *
+ * Primitive keys are used as written, so that a `Map` reads as the object it
+ * stands in for and its keys meet the same deny list. Anything else is named by
+ * its position: naming a field after a caller's object means calling that
+ * object's `toString`, which can throw and can return exactly the content this
+ * module exists to keep out of a log.
+ */
+function mapKeyName(key: unknown, index: number): string {
+  switch (typeof key) {
+    case "string":
+      return key;
+    case "number":
+    case "bigint":
+    case "boolean":
+    case "undefined":
+      return String(key);
+    case "symbol":
+      return key.toString();
+    default:
+      return key === null ? "null" : `[key ${index}]`;
+  }
+}
+
+/**
+ * A `Map` becomes an object rather than the array of pairs that spreading it
+ * produces, for one reason: an array's elements never reach `isForbiddenKey`, so
+ * `new Map([["authorization", token]])` used to be logged in clear while the
+ * identical plain object was redacted. Keeping the entry structure is also what
+ * makes the line worth reading - a flat list of pairs is not queryable.
+ */
+function sanitiseMap(
+  source: Map<unknown, unknown>,
+  depth: number,
+  walk: Walk,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  let index = 0;
+
+  for (const [key, value] of source) {
+    if (index >= MAX_ARRAY) {
+      result[OMITTED] = `[+${source.size - MAX_ARRAY} entries]`;
+      break;
+    }
+
+    const name = mapKeyName(key, index);
+    result[field(name)] = isForbiddenKey(name)
+      ? REDACTED
+      : sanitise(value, depth + 1, walk);
+    index += 1;
+  }
+
+  return result;
+}
+
+/**
+ * A `Set` keeps its list shape, because its members are values and not fields,
+ * but every member is now recursed into with the object rules applied - so a set
+ * of Supabase rows is redacted the way an array of them already was.
+ */
+function sanitiseSet(source: Set<unknown>, depth: number, walk: Walk): unknown[] {
+  const items: unknown[] = [];
+
+  for (const item of source) {
+    if (items.length >= MAX_ARRAY) {
+      items.push(`[+${source.size - MAX_ARRAY} items]`);
+      break;
+    }
+
+    items.push(sanitise(item, depth + 1, walk));
+  }
+
+  return items;
 }
 
 /**
@@ -237,31 +371,54 @@ function sanitiseObject(
  * undefined` rather than `object`, which neither the `WeakSet` nor
  * `Object.entries` accepts.
  */
-function sanitiseReference(value: object, depth: number, seen: WeakSet<object>): unknown {
-  if (value instanceof Date) return value.toISOString();
-  if (value instanceof Error) return sanitiseError(value, depth, seen);
+function sanitiseReference(value: object, depth: number, walk: Walk): unknown {
+  // A date has nothing to recurse into, and an invalid one throws from
+  // `toISOString` - which would cost the whole context rather than one field.
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? "[invalid date]" : value.toISOString();
+  }
 
-  if (seen.has(value)) return "[circular]";
+  // Both checks come in front of the `Error` branch rather than behind it, so
+  // that an error is subject to them too: `cause` can point back at its own
+  // error, and nothing else here would stop that walk.
+  if (walk.path.has(value)) return "[circular]";
   if (depth >= MAX_DEPTH) return "[depth limit]";
-  seen.add(value);
 
-  if (Array.isArray(value)) {
-    const items: unknown[] = value
-      .slice(0, MAX_ARRAY)
-      .map((item) => sanitise(item, depth + 1, seen));
+  walk.path.add(value);
 
-    if (value.length > MAX_ARRAY) items.push(`[+${value.length - MAX_ARRAY} items]`);
-    return items;
+  try {
+    if (value instanceof Error) return sanitiseError(value, depth, walk);
+
+    if (Array.isArray(value)) {
+      const items: unknown[] = value
+        .slice(0, MAX_ARRAY)
+        .map((item) => sanitise(item, depth + 1, walk));
+
+      if (value.length > MAX_ARRAY) items.push(`[+${value.length - MAX_ARRAY} items]`);
+      return items;
+    }
+
+    if (value instanceof Map) return sanitiseMap(value, depth, walk);
+    if (value instanceof Set) return sanitiseSet(value, depth, walk);
+
+    // A typed array or a Buffer carries one own key per byte, which
+    // `Object.entries` would emit as a wall of digits - and the bytes of a key
+    // are still a key, in a form no string rule can see. Only the size is
+    // useful in a log line.
+    if (ArrayBuffer.isView(value)) return `[binary ${value.byteLength} bytes]`;
+
+    return sanitiseObject(value, depth, walk);
+  } finally {
+    // Unwound on the way back up. Without this, the second sibling reference to
+    // one object is reported as a cycle and its diagnostics are lost.
+    walk.path.delete(value);
   }
-
-  if (value instanceof Map || value instanceof Set) {
-    return sanitise([...value], depth, seen);
-  }
-
-  return sanitiseObject(value, depth, seen);
 }
 
-function sanitise(value: unknown, depth: number, seen: WeakSet<object>): unknown {
+function sanitise(value: unknown, depth: number, walk: Walk): unknown {
+  if (walk.nodes <= 0) return NODE_LIMIT;
+  walk.nodes -= 1;
+
   switch (typeof value) {
     case "undefined":
       return null;
@@ -281,7 +438,7 @@ function sanitise(value: unknown, depth: number, seen: WeakSet<object>): unknown
     // `typeof null` is "object", so null reaches this branch rather than the
     // "undefined" one above.
     case "object":
-      return value === null ? null : sanitiseReference(value, depth, seen);
+      return value === null ? null : sanitiseReference(value, depth, walk);
   }
 }
 
@@ -293,9 +450,13 @@ function threshold(): number {
 }
 
 function stdout(line: string): void {
-  // The one console call in src/. Everything else logs through this module, so
-  // the `no-console` rule stays on everywhere else rather than being relaxed
-  // project-wide - which is what would let a stray debugging line survive review.
+  // The one `console.log` under src/, and the only `no-console` exemption in the
+  // repository: the three calls in scripts/ are build tooling and stand as
+  // warnings. `emit` also writes through `console.warn` and `console.error`,
+  // which the rule's own allow list permits and which therefore need no comment.
+  // What the exemption buys is that the rule stays on everywhere else rather
+  // than being relaxed project-wide - which is what would let a stray debugging
+  // line survive review.
   // eslint-disable-next-line no-console
   console.log(line);
 }
@@ -313,7 +474,7 @@ function buildRecord(level: LogLevel, message: string, context: LogContext): Log
     timestamp: new Date().toISOString(),
   };
 
-  const sanitised = sanitiseObject(context, 0, new WeakSet());
+  const sanitised = sanitiseObject(context, 0, { path: new WeakSet(), nodes: MAX_NODES });
   if (Object.keys(sanitised).length > 0) record.context = sanitised;
 
   return record;
@@ -383,7 +544,24 @@ export function logCronRun(
   counts: CronRunCounts,
   context: LogContext = {},
 ): void {
-  const record = { event: "cron.run", job, ...counts, ...context };
+  const required = { event: "cron.run", job, ...counts };
+
+  // The required fields are spread last so that they win. A caller passing its
+  // own `processed` used to overwrite the count DF-OBS-004 mandates, which
+  // silently breaks the only property that makes these lines worth keeping:
+  // that the same name means the same thing in every run.
+  //
+  // The collision is named rather than dropped quietly. Discarding a field the
+  // caller believed it was logging is the same class of defect in the other
+  // direction, and a run whose numbers are being fought over is worth knowing
+  // about; the names can only be the record's own fields, so they are safe to
+  // print.
+  const overriddenKeys = Object.keys(context).filter((key) => key in required);
+  const record = {
+    ...context,
+    ...required,
+    ...(overriddenKeys.length > 0 ? { overriddenKeys } : {}),
+  };
 
   // Warn rather than error on a partial failure: the run did its work, and a
   // failure severe enough to abort it has already been logged as an error.

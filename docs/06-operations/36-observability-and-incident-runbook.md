@@ -3,10 +3,10 @@
 | Field        | Value      |
 | ------------ | ---------- |
 | Document ID  | DF-DOC-036 |
-| Version      | 0.2.0      |
+| Version      | 0.3.0      |
 | Status       | Draft      |
 | Owner        | Founder    |
-| Last updated | 2026-08-04 |
+| Last updated | 2026-08-05 |
 
 ---
 
@@ -267,6 +267,9 @@ removed on the way through:
 | Keys naming a person's own words                                          | `note`, `content`, `title`, `body`       |
 | Push subscription material, which identifies a device                     | `endpoint`, `p256dh`, `auth`             |
 | `detail` and `details`, because PostgreSQL puts the offending row in them | `Key (name)=(Therapy) already exists`    |
+| The same key rules inside a `Map` or a `Set`, at every level              | `new Map([["authorization", token]])`    |
+| Field names as well as values, because a key can be the data              | a lookup keyed by email address          |
+| The contents of a typed array or `Buffer`, which become a byte count      | the bytes of a `VAPID_PRIVATE_KEY`       |
 | Email addresses, bearer tokens and JWTs by shape, anywhere in a string    | text interpolated into a message         |
 | The literal value of any configured secret, anywhere in a string          | `CRON_SECRET` pasted into a message      |
 
@@ -276,6 +279,16 @@ merely likely: the values of `CRON_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`,
 and replaced wherever they occur, so a caller cannot leak one by putting it under an
 innocuous key or inside a sentence.
 
+Two notes for whoever reads a line rather than writes one. A `Map` is logged as an object,
+not as the list of `[key, value]` pairs that spreading one produces, so it is searched
+exactly like the equivalent plain object — and, more to the point, its keys are subject to
+the deny list, which pairs in an array are not. A `Map` key that is not a primitive is named
+by its position, because naming a field after a caller's object means calling that object's
+`toString`, which can return the content this table exists to remove. And a field genuinely
+named `__proto__` - which is what `JSON.parse` of an upstream response can produce - appears
+as `[proto]`, because assigning that name would silently discard the field rather than
+record it.
+
 Identifiers are deliberately kept. DF-OBS-003 permits them, and a log that cannot be
 correlated to a user is not much of a log; `userId`, `momentId` and `subscriptionId` all
 pass through. What is lost is the ability to see _what_ the user recorded, which is exactly
@@ -284,18 +297,28 @@ the trade DF-OBS-002 asks for.
 Three further properties, each there because of how logging usually goes wrong:
 
 - **It never throws.** A logger is called from inside catch blocks, so an exotic object or
-  a getter that raises must not convert a handled failure into an unhandled one. The event
-  survives with its context marked unloggable.
-- **Records are bounded.** Depth, string length and array length are capped, so one bad
-  call cannot bury the lines around it or consume the retention DF-OBS-006 wants.
+  a getter that raises must not convert a handled failure into an unhandled one. A getter
+  that throws still costs the whole context, which survives marked unloggable; a value that
+  merely cannot be formatted, such as an invalid `Date`, costs only its own field.
+- **Records are bounded.** Depth, string length, array length and `Map` length are capped,
+  and the walk over one record has a fixed budget of values on top of those. The budget is
+  not redundant: a cycle is recognised by looking at the ancestors of a value rather than at
+  everything already seen, which is what keeps an object referenced twice in sibling
+  positions from being reported as a loop, and that same property lets a small structure
+  that shares its children expand into millions of values. So one bad call cannot bury the
+  lines around it, consume the retention DF-OBS-006 wants, or hang the request it was
+  reporting on.
 - **`Error` objects are serialised properly**, including `stack`, `cause` and own
   properties such as a Supabase `code` or a push service `statusCode`. `JSON.stringify` of
   an `Error` produces `{}`, which is the most common way an error log ends up empty.
 
-The ESLint `no-console` rule stays on for the whole project. The exemption is a single
-`eslint-disable-next-line` on the one line in this module that writes to stdout; there is
-no project-wide relaxation and no file-level disable comment anywhere. A stray
-`console.log` added in a future change is therefore still a lint warning.
+The ESLint `no-console` rule stays on for the whole project, configured to allow `warn` and
+`error` - so the module's own `console.warn` and `console.error` sinks need no exemption, and
+the only `no-console` exemption in the repository is the `eslint-disable-next-line` on the
+one `console.log` under `src/`, the stdout sink in this module. The three `console.log` calls
+in `scripts/` are build tooling and stand as warnings rather than being exempted. There is no
+project-wide relaxation and no file-level disable comment anywhere. A stray `console.log`
+added in a future change is therefore still a lint warning.
 
 ### 11.2 Where it is wired
 
@@ -334,6 +357,12 @@ and guessing wrong makes the numbers worse than useless.
 | `reminders`    | Pending Moments scanned | Notifications accepted | Notifications with no device to send | Notification sends that erred |
 | `auto-close`   | Pending Moments scanned | Notifications accepted | Moments not yet eligible to close    | Close writes refused          |
 | `daily-report` | Report jobs attempted   | Notifications accepted | Periods with nothing recorded        | Report jobs that threw        |
+
+The names are fixed in the stronger sense too: `logCronRun` writes the four counts, `event`
+and `job` after the caller's own fields, so a caller passing a `processed` of its own cannot
+displace the mandated one. Nothing is discarded quietly - the names that collided are listed
+in the same line under `overriddenKeys`, which is worth searching for, because a run whose
+numbers are being written twice is a defect in the job rather than in the log.
 
 Each line also carries the fields specific to its job - `reminded`, `warned`, `closed`,
 `generated`, `subscriptionsPruned` - plus `durationMs`. **A run with nothing to do still
@@ -403,7 +432,14 @@ console; see DF-OBS-007 in section 11.6 for what closing that gap would take.
 | DF-OBS-006 | **Not met** | Needs a log drain to durable storage, which is a paid Vercel feature  |
 | DF-CD-011  | **Not met** | Assessed in 11.7. Not achievable in-repo without an outside observer  |
 
-Two caveats on DF-OBS-002, stated rather than glossed:
+Three caveats on DF-OBS-002, stated rather than glossed:
+
+- **Prose is not caught by anything.** The rules are a deny list over key names plus patterns
+  over string content, so a caller who interpolates a Moment note into a `message`, or puts
+  it under a key that describes nothing - `diagnostic`, `info` - defeats both. A note is
+  indistinguishable from a real diagnostic by inspection. What the module removes is the
+  mistake a caller makes by reflex, which is passing a whole row; what it cannot remove is a
+  caller deciding to log somebody's words on purpose.
 
 - **PostgreSQL `message` text is retained** while `DETAIL` is dropped. This is the right
   split in every case examined - Postgres names the constraint in the message and puts the
@@ -464,7 +500,8 @@ for. The requirement stays open.
 
 ## Change History
 
-| Version | Date       | Author  | Change                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| ------- | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 0.1.0   | 2026-08-04 | Founder | Initial draft.                                                                                                                                                                                                                                                                                                                                                                                                           |
-| 0.2.0   | 2026-08-04 | Founder | Added section 11 recording what is implemented: the structured logger and its redaction rules, where it is wired, the meaning of the cron counts, how to search the logs, and the error boundaries. Recorded DF-OBS-006 and DF-CD-011 as unmet, with the reasons. Marked the uncollected signals in section 3 and the absence of any alerting in section 5. Made the log-reading steps in sections 7.1 and 7.4 specific. |
+| Version | Date       | Author  | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------- | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0.1.0   | 2026-08-04 | Founder | Initial draft.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 0.3.0   | 2026-08-05 | Agent   | Recorded the redaction guarantee as it now stands in section 11.1: the key rules reach into a `Map` and a `Set` at every level, field names are scrubbed as well as values, and binary values become a byte count. Noted how a `Map` and a `__proto__` field appear in a line. Added a third DF-OBS-002 caveat: prose under a key that describes nothing is caught by nothing. Stated the bounds accurately, including the per-record value budget that ancestor-based cycle detection requires. Corrected the `no-console` paragraph, which did not say that the rule permits `warn` and `error`. Recorded in 11.3 that the DF-OBS-004 counts now win over a colliding caller field and that the collision is reported under `overriddenKeys`. No requirement status changed. |
+| 0.2.0   | 2026-08-04 | Founder | Added section 11 recording what is implemented: the structured logger and its redaction rules, where it is wired, the meaning of the cron counts, how to search the logs, and the error boundaries. Recorded DF-OBS-006 and DF-CD-011 as unmet, with the reasons. Marked the uncollected signals in section 3 and the absence of any alerting in section 5. Made the log-reading steps in sections 7.1 and 7.4 specific.                                                                                                                                                                                                                                                                                                                                                       |

@@ -224,6 +224,73 @@ describe("redaction", () => {
     expect(output).toContain("Bearer [redacted]");
   });
 
+  it("drops a credential held under a key inside a Map, not only inside an object", () => {
+    // A Map used to be converted with spread syntax, and an array's elements
+    // never reach the deny list - so this leaked while the identical plain
+    // object was redacted. The value is deliberately not a recognisable
+    // credential shape, so the key name is the only thing that can save it.
+    logger.error("Upstream call refused", {
+      headers: new Map([
+        ["authorization", "opaque-header-material-4f2a9c"],
+        ["x-request-id", "8c2f"],
+      ]),
+    });
+
+    const headers = lastRecord(stderr).context?.headers as Record<string, unknown>;
+
+    expect(headers.authorization).toBe(REDACTED);
+    expect(headers["x-request-id"]).toBe("8c2f");
+    expect(everything()).not.toContain("opaque-header-material-4f2a9c");
+  });
+
+  it("applies the same rules to what a Map value contains, at any depth", () => {
+    logger.error("Batch failed", {
+      byUser: new Map([
+        [
+          "9c1e4b77-0000-0000-0000-000000000002",
+          {
+            momentId: "m1",
+            note: "Therapy session, felt awful afterwards",
+            upstream: new Map([["token", "opaque-token-material-77b1"]]),
+          },
+        ],
+      ]),
+    });
+
+    const output = everything();
+
+    expect(output).not.toContain("Therapy session");
+    expect(output).not.toContain("opaque-token-material-77b1");
+    expect(output).toContain("momentId");
+  });
+
+  it("reaches into the members of a Set rather than listing them untouched", () => {
+    logger.warn("Closes refused", {
+      refused: new Set([{ momentId: "m1", note: "Dentist, hated it" }]),
+    });
+
+    const refused = lastRecord(warnings).context?.refused as Record<string, unknown>[];
+
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.momentId).toBe("m1");
+    expect(refused[0]?.note).toBe(REDACTED);
+  });
+
+  it("scrubs field names as well as values, because a lookup can be keyed by one", () => {
+    // Neither of these is caught by the deny list: the sensitive part is the key
+    // itself, which describes nothing and carries everything.
+    logger.error("Duplicate account", {
+      lookup: { "person@example.com": "u1" },
+      byAddress: new Map([["person@example.com", { id: "u1" }]]),
+    });
+
+    const output = everything();
+
+    expect(output).not.toContain("person@example.com");
+    expect(output).toContain("[redacted-email]");
+    expect(output).toContain("u1");
+  });
+
   it("keeps a Postgres message but not its DETAIL, which echoes the offending row", () => {
     // Postgres puts the constraint name in the message and the conflicting values
     // in DETAIL, so this split keeps the diagnostic and drops the category name.
@@ -274,6 +341,106 @@ describe("difficult values", () => {
     expect(everything()).toContain("[circular]");
   });
 
+  it("logs an object that appears twice as siblings instead of calling it a cycle", () => {
+    // Two references to one object are two facts about the payload, not a loop.
+    // Reporting the second as circular drops a diagnostic without saying so.
+    const user = { id: "9c1e4b77-0000-0000-0000-000000000002" };
+
+    logger.error("Two references", { first: user, second: user, both: [user, user] });
+
+    const context = lastRecord(stderr).context ?? {};
+
+    expect(context.first).toEqual(user);
+    expect(context.second).toEqual(user);
+    expect(context.both).toEqual([user, user]);
+    expect(everything()).not.toContain("[circular]");
+  });
+
+  it("still reports an ancestor cycle, including one through an error cause", () => {
+    const failure = new Error("push service rejected");
+    failure.cause = failure;
+
+    expect(() =>
+      logger.error("Self-referential cause", { error: failure }),
+    ).not.toThrow();
+
+    const error = lastRecord(stderr).context?.error as Record<string, unknown>;
+
+    expect(error.message).toBe("push service rejected");
+    expect(error.cause).toBe("[circular]");
+  });
+
+  it("stops at the depth limit rather than following a structure down for ever", () => {
+    let deep: Record<string, unknown> = { end: "bottom" };
+    for (let index = 0; index < 10_000; index += 1) deep = { deep };
+
+    expect(() => logger.error("Deep structure", { deep })).not.toThrow();
+
+    expect(everything()).toContain("[depth limit]");
+    expect(everything()).not.toContain("bottom");
+  });
+
+  it("gives up on a graph that shares its children instead of expanding it", () => {
+    // Ancestor-only cycle detection is what makes the sibling case above work,
+    // and it is also what lets a few hundred bytes of caller data expand into a
+    // megabyte of output. The budget is what stops that, so it is asserted here
+    // rather than assumed.
+    const fanOut = (child: unknown): Record<string, unknown> =>
+      Object.fromEntries(Array.from({ length: 40 }, (_, index) => [`k${index}`, child]));
+
+    const shared = fanOut(fanOut(fanOut({ id: "leaf" })));
+
+    expect(() => logger.error("Shared graph", { shared })).not.toThrow();
+
+    expect(everything()).toContain("[node limit]");
+    expect(everything().length).toBeLessThan(100_000);
+  });
+
+  it("caps a large Map the way it caps a large array", () => {
+    const large = new Map(
+      Array.from({ length: 100 }, (_, index) => [`k${index}`, index]),
+    );
+
+    logger.info("Large map", { large });
+
+    const emitted = lastRecord(stdout).context?.large as Record<string, unknown>;
+
+    expect(Object.keys(emitted)).toHaveLength(21);
+    expect(emitted["[omitted]"]).toBe("[+80 entries]");
+  });
+
+  it("keeps the rest of the context when a Date cannot be formatted", () => {
+    // `toISOString` throws on an invalid date, which used to cost every other
+    // field in the record rather than that one.
+    logger.info("Bad cutoff", { job: "reminders", cutoff: new Date("not a date") });
+
+    expect(lastRecord(stdout).context).toEqual({
+      job: "reminders",
+      cutoff: "[invalid date]",
+    });
+  });
+
+  it("still reports a field whose name is __proto__ rather than losing it", () => {
+    // What `JSON.parse` of an upstream response produces. Assigned as a key it
+    // would run Object.prototype's setter and vanish from the line.
+    const payload = JSON.parse('{"__proto__":{"note":"Therapy session"}}') as object;
+
+    logger.error("Untrusted payload", { payload });
+
+    const emitted = lastRecord(stderr).context?.payload as Record<string, unknown>;
+
+    expect(emitted["[proto]"]).toEqual({ note: REDACTED });
+    expect(everything()).not.toContain("Therapy session");
+  });
+
+  it("records the size of binary data rather than its bytes", () => {
+    // The bytes of a key are still a key, and enumerating a typed array emits one
+    // numbered field per byte - a form no string rule can see.
+    logger.info("Binary payload", { payload: new Uint8Array([1, 2, 3, 4]) });
+
+    expect(lastRecord(stdout).context?.payload).toBe("[binary 4 bytes]");
+  });
+
   it("still records the event when the context cannot be read at all", () => {
     // A logger that throws turns a handled failure into an unhandled one, and it
     // is almost always called from inside a catch block.
@@ -287,6 +454,29 @@ describe("difficult values", () => {
 
     const record = lastRecord(stderr);
     expect(record.message).toBe("Report generation failed");
+    expect(record.context).toEqual({ contextSerialisation: "failed" });
+  });
+
+  it("does not let a getter that throws inside a Map reach the caller either", () => {
+    // Same guarantee, through the collection walk added for the Map fix. The
+    // whole context is still sacrificed rather than the one field, which is the
+    // existing trade above and not a new one.
+    const hostile = new Map<string, unknown>([
+      ["job", "reminders"],
+      [
+        "row",
+        {
+          get boom(): string {
+            throw new Error("getter exploded");
+          },
+        },
+      ],
+    ]);
+
+    expect(() => logger.error("Sweep failed", { hostile })).not.toThrow();
+
+    const record = lastRecord(stderr);
+    expect(record.message).toBe("Sweep failed");
     expect(record.context).toEqual({ contextSerialisation: "failed" });
   });
 
@@ -316,6 +506,28 @@ describe("cron run accounting", () => {
       failed: 0,
       users: 3,
       durationMs: 812,
+    });
+  });
+
+  it("keeps its own counts when a caller passes fields of the same name", () => {
+    // The value of these lines is entirely in every run reporting the same thing
+    // under the same name, so the required fields win and the collision is named
+    // rather than discarded in silence.
+    logCronRun(
+      "reminders",
+      { processed: 31, sent: 4, skipped: 2, failed: 0 },
+      { processed: 0, failed: 99, job: "somewhere-else", users: 3 },
+    );
+
+    expect(lastRecord(stdout).context).toEqual({
+      event: "cron.run",
+      job: "reminders",
+      processed: 31,
+      sent: 4,
+      skipped: 2,
+      failed: 0,
+      users: 3,
+      overriddenKeys: ["processed", "failed", "job"],
     });
   });
 
