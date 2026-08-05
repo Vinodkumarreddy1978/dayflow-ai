@@ -3,7 +3,7 @@
 | Field        | Value                                               |
 | ------------ | --------------------------------------------------- |
 | Document ID  | - (root operator document, outside the docs/ suite) |
-| Version      | 0.2.0                                               |
+| Version      | 0.3.0                                               |
 | Status       | Draft                                               |
 | Owner        | Founder                                             |
 | Last updated | 2026-08-05                                          |
@@ -271,84 +271,185 @@ accepted (`src/lib/env.ts` line 26). To check the length without printing the ke
 (Get-Content .env.local | Where-Object { $_ -like 'NEXT_PUBLIC_VAPID_PUBLIC_KEY=*' }) -replace '^[^=]+=', '' | ForEach-Object { $_.Length }
 ```
 
-### Step 6. Read off the `CRON_SECRET` you will use
+### Step 6. Generate the production `CRON_SECRET` without ever displaying it
 
-**Who:** operator. **Time:** 3 minutes.
+**Who:** operator. **Time:** 5 minutes.
 
 You need this exact string twice: in Vercel (step 24) and in the Supabase Vault (step 31).
 They are compared byte for byte, and a mismatch produces a 401 that only appears in Vercel's
 function logs (`src/lib/push/send.ts` lines 123-132).
 
-Your local `.env.local` already has a 64-character value. Copy it out to your clipboard or
-password manager now:
+Generate a fresh value for production rather than reusing the one already in your local
+`.env.local`. `docs/05-engineering/32-environment-and-configuration.md` DF-CFG-011 requires
+it - "production secrets MUST differ from development secrets" - and it has the practical
+benefit that the value in your local file never has to be handled at all.
 
-```powershell
-(Get-Content .env.local | Where-Object { $_ -like 'CRON_SECRET=*' }) -replace '^CRON_SECRET=', '' | Set-Clipboard
-```
-
-If you would rather use a fresh secret for production - which
-`docs/05-engineering/32-environment-and-configuration.md` DF-CFG-011 asks for, and which is
-the better choice - generate one:
+This puts 48 random bytes on the clipboard and prints nothing:
 
 ```powershell
 $b = New-Object byte[] 48
 [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
-[Convert]::ToBase64String($b)
+[Convert]::ToBase64String($b).Replace('+','-').Replace('/','_').TrimEnd('=') | Set-Clipboard
 ```
 
-**Confirm it worked:** the value is at least 16 characters. Shorter than that is refused by
-`src/lib/env.ts` line 112, at runtime rather than at build time - see section 5.
+The value goes straight from the generator into the clipboard and is never rendered. The
+`Replace` calls swap base64's `+` and `/` for the URL-safe `-` and `_`, and `TrimEnd`
+removes the `=` padding, because the standard alphabet's characters are awkward in URLs and
+in some header contexts. The result is 64 characters, and it is still an opaque bearer token
+as far as `src/lib/push/send.ts` is concerned.
 
-**A decision to make consciously:** if you use a different `CRON_SECRET` in production from
-the one in `.env.local`, the Vault secret in step 31 must hold the **production** one, and
+Paste it from the clipboard directly into Vercel in step 24 and into the Supabase Vault in
+step 31. If you need it to survive longer than this session, paste it into a password
+manager's password field - which masks it - and not into a note.
+
+**Confirm it worked:** the value is at least 16 characters. Shorter than that is refused by
+`src/lib/env.ts` line 112, at runtime rather than at build time - see section 5. Check the
+length without rendering the value:
+
+```powershell
+(Get-Clipboard -Raw).Length
+```
+
+That prints `64`.
+
+**Never let this value be rendered, and treat it as burned if it is.** Do not type it into a
+terminal, do not paste it into one, do not `Write-Output` or `echo` it, and do not paste it
+into a chat window, an email or a ticket. Pasting a secret into PowerShell is worse than it
+looks: the shell echoes it to the screen, and PSReadLine also appends every line you enter,
+in plain text, to
+`%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt`, which survives
+closing the window and rebooting the machine.
+
+If that happens, the secret is compromised. Generate a new one with the command above, use
+the new one in steps 24 and 31, and then clean up: close the PowerShell window that showed
+the value so its scrollback goes with it, and delete the offending line from the history
+file. Open it in an editor rather than filtering it from the command line, so that you do
+not have to type any part of the secret a second time:
+
+```powershell
+notepad "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt"
+```
+
+Delete the line, save, and close. Do this from a different window than the one you are
+cleaning, because PSReadLine appends that session's history as you go.
+
+**A decision to make consciously:** using a different `CRON_SECRET` in production from the
+one in `.env.local` means the Vault secret in step 31 must hold the **production** one, and
 your local machine can then no longer successfully call the production cron endpoints by
 hand. That is the correct trade-off; just know which value you are holding.
 
-### Step 7. Get the code somewhere Vercel can deploy from
+### Step 7. Push the repository to GitHub
 
-**Who:** operator. **Time:** 15 minutes with the Vercel CLI, 30-45 minutes via GitHub.
+**Who:** operator. **Time:** 15 minutes, plus however long the first CI run takes.
 
-**This is a real blocker and the existing documentation does not mention it.** `git` is not
-installed on this machine - `git` is not a recognised command - and there is no `.git`
-directory in the repository, so this working copy is not a Git repository at all.
-`README.md` line 400 and `docs/05-engineering/33-cicd-and-deployment-runbook.md` line 126
-both begin with "push this repository to GitHub" / "import the repository", which you cannot
-currently do.
+**Most of this step is already done.** An earlier version of this document described Git as
+not installed and offered a Vercel-CLI route around it. That is no longer the situation. As
+of 5 August 2026, verified by running the commands:
 
-You have two routes. Read both before choosing.
+- A portable **MinGit 2.55.0.windows.3** is unpacked at
+  `%LOCALAPPDATA%\dayflow-toolchain\MinGit-2.55.0.3-64-bit\cmd\git.exe`. It sits under your
+  own profile, needs no administrator rights, and is on neither the machine nor the user
+  PATH, so, exactly like Node in step 1, you enable it per session.
+- This working copy is a Git repository on branch `main` with two commits: `f54864f`, a
+  baseline snapshot of the tree, and `1b0ef44`, the verified commit that adds the data
+  export, account deletion, structured logging and error boundaries.
+- `origin` is configured and points at
+  `https://github.com/Vinodkumarreddy1978/dayflow-ai.git`, a private repository that already
+  exists.
+- Git over HTTPS works through the corporate TLS interception, which took a fix - see below.
+- `.gitattributes` was added in `1b0ef44`, pinning `* text=auto eol=lf`. It is load-bearing:
+  `core.autocrlf` is `true` in MinGit's own system configuration and `.prettierrc` sets
+  `endOfLine: "lf"`, so without it a clone on Windows checks out CRLF and
+  `npx prettier --check .` then fails on every file.
 
-**Route A - Vercel CLI, no Git.** Deploys the directory as it stands.
+Two things are left: replacing the placeholder commit author, and the push itself. Nothing
+has been pushed - `git show-ref` lists only `refs/heads/main`, and the branch has no
+upstream.
+
+**The TLS fix, so you know what is holding this together.** Every HTTPS operation initially
+failed with `CRYPT_E_NO_REVOCATION_CHECK (0x80092012)`. The cause is that the PwC perimeter
+appliance re-issues certificates carrying no CRL distribution point and no OCSP responder,
+so schannel's revocation check can never succeed, and `http.schannelCheckRevoke=false` does
+not suppress it in this MinGit build - that setting is still present in the local
+configuration, left over from the attempt, and does nothing. The fix was to move this
+repository onto MinGit's bundled OpenSSL backend with a CA bundle exported from the Windows
+root store:
+
+| Setting           | Value                                                               |
+| ----------------- | ------------------------------------------------------------------- |
+| `http.sslBackend` | `openssl`                                                           |
+| `http.sslCAInfo`  | `%LOCALAPPDATA%\dayflow-toolchain\certs\windows-root-ca-bundle.pem` |
+
+This is not a "turn verification off" workaround. Certificate chain and hostname
+verification remain on; `http.sslVerify` was never touched and is at its default of `true`.
+Confirmed with `git ls-remote` against a public repository, which returns its full ref list -
+5280 refs - instead of an error.
+
+**Now do the remaining work.** In a new PowerShell window:
 
 ```powershell
-npx vercel login
-npx vercel link
-npx vercel --prod
+$env:Path = "$env:LOCALAPPDATA\dayflow-toolchain\MinGit-2.55.0.3-64-bit\cmd;$env:Path"
+cd "C:\Users\preddy111\OneDrive - PwC\Documents\DayFlowAI"
+git config --local user.name "Your Real Name"
+git config --local user.email "you@example.com"
+git commit --amend --reset-author --no-edit
+git push -u origin main
 ```
 
-This is faster and needs no Git. The cost is real: no CI on pull requests, no preview
-deployments, no automatic deploy when the code changes, and no version history. Every future
-deploy is you running `npx vercel --prod` by hand from this folder. The GitHub Actions
-workflow in `.github/workflows/ci.yml` will never run.
+**What the amend actually does.** Both commits were authored as
+`DayFlowAI Developer <developer@example.com>`, a placeholder. `--reset-author` rewrites the
+top commit with the identity you just configured and `--no-edit` keeps its message
+unchanged. Rewriting a commit changes its hash, so `1b0ef44` becomes a different id. That is
+safe here **only** because nothing has been pushed and nobody else holds a copy; after a
+push the same command would need a force push and would break anyone who had pulled. Note
+that this fixes the top commit only. `f54864f` keeps the placeholder author unless you choose
+to squash the two commits into one, which is reasonable and is not required.
 
-**Route B - install Git, push to GitHub, connect the repository.** This is what the
-repository's own documents assume and what makes CI, previews and automatic deploys work.
-You will need to install Git for Windows first, then create an empty private repository on
-GitHub and push to it.
+**The push is interactive - do not start it and walk away.** Git Credential Manager opens a
+browser window or a sign-in dialog the first time. Two things commonly go wrong on a
+corporate machine:
 
-Whichever route you take, confirm the secrets stay out of it. `.gitignore` already excludes
-`.env`, `.env*.local` and `.env.production`, so `.env.local` will not be committed. Verify
-that before pushing anything.
+- If policy blocks the browser OAuth flow, create a personal access token on GitHub with the
+  `repo` scope and paste it when Git asks for a password.
+- If the repository sits under an organisation that enforces SAML single sign-on, the token
+  must also be authorised for that organisation. Until it is, the push fails with a message
+  saying the repository does not exist or that you lack permission, which reads like a wrong
+  URL and is not.
+
+Before pushing, satisfy yourself the secrets stay out of it. `.gitignore` line 31 excludes
+`.env*.local`, so `.env.local` is not tracked; the only environment file in the repository is
+`.env.example`.
 
 **Confirm it worked:**
 
-- Route A: `npx vercel link` reports the project is linked, and a `.vercel` directory now
-  exists in the repository (it is git-ignored).
-- Route B: the GitHub repository page shows your files, **and** searching that repository for
-  `SUPABASE_SERVICE_ROLE_KEY` finds it only in `.env.example` and in documentation, never with
-  a real value beside it.
+- The GitHub repository page shows your files, and the top commit carries **your** name and
+  its new hash rather than `DayFlowAI Developer`.
+- Searching that repository for `SUPABASE_SERVICE_ROLE_KEY` finds it only in `.env.example`
+  and in documentation, never with a real value beside it.
+- **The Actions tab shows the CI workflow running, for the first time ever.** This is the one
+  worth waiting for. `.github/workflows/ci.yml` triggers on pushes to `main` and defines four
+  jobs: `verify` (format, lint, tests, build, type check, bundle budget), `audit`, `e2e` and
+  `migrations`.
 
-**Unverified:** I have not run either route. The Vercel CLI commands are the documented
-interface and I am relying on general knowledge of it, not on anything in this repository.
+**Expect that first run to be informative rather than green, and do not read a failure as a
+disaster.** Every check that has passed so far passed on one warm Windows machine with an
+already-populated `node_modules` and a local `.env.local`. CI runs on a clean
+`ubuntu-latest` checkout with `npm ci` and placeholder environment values, which is a
+genuinely different environment - case-sensitive paths, LF line endings, a fresh dependency
+resolution. `migrations` is the least exercised of the four: it applies every migration in
+order against a throwaway Postgres and then re-applies them to prove they are idempotent,
+and nothing local has ever done that.
+
+**The TLS configuration is `--local` to this repository.** A clone anywhere else - another
+machine, another folder on this one - starts again with schannel and fails the same way, so
+`http.sslBackend` and `http.sslCAInfo` have to be set again there. The CA bundle is also a
+point-in-time export of the Windows root store: if PwC rotates or adds a root certificate,
+regenerate it or Git starts rejecting certificates it should accept.
+
+**Not the chosen path, noted only for someone in a different situation:** Vercel's CLI can
+deploy this directory with no Git at all (`npx vercel login`, `npx vercel link`,
+`npx vercel --prod`), at the cost of CI, preview deployments, automatic deploys and version
+history.
 
 ### Step 8. Start the custom email sender now, because DNS takes time
 
@@ -822,10 +923,8 @@ propagate (lines 31-41 of that migration).
 
 **Where:** [vercel.com](https://vercel.com) → **Add New** → **Project**.
 
-- **Route B (GitHub):** import the repository you created in step 7. Framework detection needs
-  no help - `vercel.json` already declares `"framework": "nextjs"`.
-- **Route A (CLI):** the project was created by `npx vercel link` in step 7. Open it in the
-  dashboard.
+Import the GitHub repository you pushed in step 7. Framework detection needs no help -
+`vercel.json` already declares `"framework": "nextjs"`.
 
 Choose the project name deliberately, because on a Vercel-assigned domain the name determines the
 URL you wrote down in step 3.
@@ -965,8 +1064,7 @@ custom domain too. Check it in step 27.
 
 **Who:** operator. **Time:** 5 minutes, mostly the build.
 
-- **Route B (GitHub):** Vercel dashboard → **Deployments** → redeploy the latest, or push a commit.
-- **Route A (CLI):** `npx vercel --prod` from the repository root, after step 1.
+Vercel dashboard → **Deployments** → redeploy the latest, or push a commit to `main`.
 
 **Confirm it worked:** the deployment reaches **Ready**. Open the build log and check that it
 compiled without an error and printed a route table.
@@ -1660,7 +1758,7 @@ stop, look at the project before concluding the application is broken.
 
 ### Step 46. Turn on Dependabot alerts
 
-**Who:** operator. **Time:** 5 minutes. Route B only.
+**Who:** operator. **Time:** 5 minutes.
 
 **Where:** GitHub → the repository → **Settings** → **Advanced Security** or **Code security**.
 
@@ -1717,23 +1815,23 @@ it is fixed makes it impossible to tell "verified and corrected" from "never loo
 numbers in the Source column point at the file **as it was when the error was found**, so they will
 not line up with a corrected file.
 
-| Source                                                          | What it says                                                                            | What is actually true                                                                                                                                                                                                                                                                         |
-| --------------------------------------------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 100-101 | `0011` reads Vault "at apply time", so the secrets must exist before the migrations run | `0011` only defines `invoke_cron_endpoint`, which reads Vault when **called** (lines 38-42). The file's own header says "read at run time" (lines 10-11). The stated ordering is unnecessary                                                                                                  |
-| `GO-LIVE.md` 235-237                                            | Section 4.1 of the runbook calls the secrets `app_url` and `cron_secret`                | **Applied 5 Aug 2026.** The runbook was corrected to `dayflow_app_url` / `dayflow_cron_secret` in its version 0.1.1, and `GO-LIVE.md` section 5 already recorded that as closed - so section 1.6 was contradicting its own section 5. It now states the names plainly                         |
-| `HANDOFF.md` 255                                                | `/api/reports/generate` depends on `0014`                                               | **Applied 5 Aug 2026.** It does not. That route omits the user id, taking the `get_period_facts` branch from `0010` (`src/lib/ai/report.ts` 56-63). `/api/cron/daily-report` passes a user id and is what needs `get_period_facts_for_user` from `0014`                                       |
-| `README.md` 218-225, 229-244                                    | Run `0001` through `0013`, "thirteen files"; the table stops at `0014`                  | There are fifteen migrations, `0001` through `0015`                                                                                                                                                                                                                                           |
-| `README.md` 400-407, runbook 126                                | "Push this repository to GitHub", "import the repository"                               | **Now partly stale.** A portable MinGit was installed and the tree committed as `f54864f` on 4 Aug 2026, so `.git` exists and has history. There is still no configured remote and nothing has been pushed. Step 7 remains the procedure                                                      |
-| `scripts/build-all-migrations.mjs` 11                           | `npm run db:bundle:check` "is what CI runs"                                             | **Corrected in the script, still true of CI.** The header comment now says nothing runs it, and `HANDOFF.md` no longer repeats the claim. `.github/workflows/ci.yml` still has no such step, so the check happens only when somebody remembers                                                |
-| `GO-LIVE.md` 429-436, 502-503, 621-622                          | `curl -i -X POST ...`, `date +%Y-%m-%d`, `grep`                                         | **Applied 5 Aug 2026.** Bash. In PowerShell 5.1 `curl` is an alias for `Invoke-WebRequest` and rejects those flags. Each snippet in `GO-LIVE.md` now carries a note pointing at the PowerShell equivalent here, in steps 32, 43 and 27 respectively                                           |
-| `GO-LIVE.md` 139, 159-160                                       | The redirect target comes from `auth-form.tsx` and `reset-password-form.tsx`            | **Applied 5 Aug 2026.** Both redirect strings are in `src/features/auth/auth-operations.ts` lines 33 and 45. Those form files exist but the calls were moved out of them so the Supabase client could load lazily                                                                             |
-| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 121-122 | Configure redirect URLs "including `/auth/callback`"                                    | Insufficient on its own. Without the `/auth/callback**` wildcard entry, password reset silently lands on the landing page. `GO-LIVE.md` 133-144 explains it; the runbook does not mention it                                                                                                  |
-| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 116-117 | `supabase db push` "includes `0012` and `0014`"                                         | Does not mention `0015`, which is also pending and which is what makes account deletion possible at all                                                                                                                                                                                       |
-| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 43-53   | The CI job table                                                                        | Omits the `audit` job that `.github/workflows/ci.yml` lines 76-102 actually defines                                                                                                                                                                                                           |
-| `docs/05-engineering/32-environment-and-configuration.md` 141   | Supabase Vault holds "`CRON_SECRET`"                                                    | It holds two secrets. `dayflow_app_url` is missing from that table, and it is the one that silently stops reminders                                                                                                                                                                           |
-| `README.md` 36-37                                               | 107 tests across 6 files; largest route 221 kB                                          | **Resolved 5 Aug 2026 by running the suite.** Both figures were stale, and so were the 142/8 and 317/14 counts that replaced them in turn. The measured state is **318 tests across 14 files**, and the largest route is `/dashboard` at 204 kB. `README.md` and `HANDOFF.md` now both say so |
-| `README.md` 324                                                 | Links to `middleware.ts` at the repository root                                         | The file is `src/middleware.ts`. The root copy was removed because Next.js only loads middleware beside `app/` (`HANDOFF.md` 216-228). The link is dead                                                                                                                                       |
-| `README.md` 387                                                 | Realtime is disabled under **Project Settings → API**                                   | Unverified and probably stale. Publication membership is what `0012` manages; the dashboard control for it is generally under **Database**. Step 37 says to check both                                                                                                                        |
+| Source                                                          | What it says                                                                            | What is actually true                                                                                                                                                                                                                                                                                                            |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 100-101 | `0011` reads Vault "at apply time", so the secrets must exist before the migrations run | `0011` only defines `invoke_cron_endpoint`, which reads Vault when **called** (lines 38-42). The file's own header says "read at run time" (lines 10-11). The stated ordering is unnecessary                                                                                                                                     |
+| `GO-LIVE.md` 235-237                                            | Section 4.1 of the runbook calls the secrets `app_url` and `cron_secret`                | **Applied 5 Aug 2026.** The runbook was corrected to `dayflow_app_url` / `dayflow_cron_secret` in its version 0.1.1, and `GO-LIVE.md` section 5 already recorded that as closed - so section 1.6 was contradicting its own section 5. It now states the names plainly                                                            |
+| `HANDOFF.md` 255                                                | `/api/reports/generate` depends on `0014`                                               | **Applied 5 Aug 2026.** It does not. That route omits the user id, taking the `get_period_facts` branch from `0010` (`src/lib/ai/report.ts` 56-63). `/api/cron/daily-report` passes a user id and is what needs `get_period_facts_for_user` from `0014`                                                                          |
+| `README.md` 218-225, 229-244                                    | Run `0001` through `0013`, "thirteen files"; the table stops at `0014`                  | There are fifteen migrations, `0001` through `0015`                                                                                                                                                                                                                                                                              |
+| `README.md` 400-407, runbook 126                                | "Push this repository to GitHub", "import the repository"                               | **No longer stale, and nearly satisfied.** A portable MinGit was installed and the tree committed on 4 Aug 2026 (`f54864f`, then `1b0ef44`), `origin` now points at the private GitHub repository, and Git over HTTPS works through the corporate TLS interception. Only the push itself is outstanding. Step 7 is the procedure |
+| `scripts/build-all-migrations.mjs` 11                           | `npm run db:bundle:check` "is what CI runs"                                             | **Corrected in the script, still true of CI.** The header comment now says nothing runs it, and `HANDOFF.md` no longer repeats the claim. `.github/workflows/ci.yml` still has no such step, so the check happens only when somebody remembers                                                                                   |
+| `GO-LIVE.md` 429-436, 502-503, 621-622                          | `curl -i -X POST ...`, `date +%Y-%m-%d`, `grep`                                         | **Applied 5 Aug 2026.** Bash. In PowerShell 5.1 `curl` is an alias for `Invoke-WebRequest` and rejects those flags. Each snippet in `GO-LIVE.md` now carries a note pointing at the PowerShell equivalent here, in steps 32, 43 and 27 respectively                                                                              |
+| `GO-LIVE.md` 139, 159-160                                       | The redirect target comes from `auth-form.tsx` and `reset-password-form.tsx`            | **Applied 5 Aug 2026.** Both redirect strings are in `src/features/auth/auth-operations.ts` lines 33 and 45. Those form files exist but the calls were moved out of them so the Supabase client could load lazily                                                                                                                |
+| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 121-122 | Configure redirect URLs "including `/auth/callback`"                                    | Insufficient on its own. Without the `/auth/callback**` wildcard entry, password reset silently lands on the landing page. `GO-LIVE.md` 133-144 explains it; the runbook does not mention it                                                                                                                                     |
+| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 116-117 | `supabase db push` "includes `0012` and `0014`"                                         | Does not mention `0015`, which is also pending and which is what makes account deletion possible at all                                                                                                                                                                                                                          |
+| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 43-53   | The CI job table                                                                        | Omits the `audit` job that `.github/workflows/ci.yml` lines 76-102 actually defines                                                                                                                                                                                                                                              |
+| `docs/05-engineering/32-environment-and-configuration.md` 141   | Supabase Vault holds "`CRON_SECRET`"                                                    | It holds two secrets. `dayflow_app_url` is missing from that table, and it is the one that silently stops reminders                                                                                                                                                                                                              |
+| `README.md` 36-37                                               | 107 tests across 6 files; largest route 221 kB                                          | **Resolved 5 Aug 2026 by running the suite.** Both figures were stale, and so were the 142/8 and 317/14 counts that replaced them in turn. The measured state is **318 tests across 14 files**, and the largest route is `/dashboard` at 204 kB. `README.md` and `HANDOFF.md` now both say so                                    |
+| `README.md` 324                                                 | Links to `middleware.ts` at the repository root                                         | The file is `src/middleware.ts`. The root copy was removed because Next.js only loads middleware beside `app/` (`HANDOFF.md` 216-228). The link is dead                                                                                                                                                                          |
+| `README.md` 387                                                 | Realtime is disabled under **Project Settings → API**                                   | Unverified and probably stale. Publication membership is what `0012` manages; the dashboard control for it is generally under **Database**. Step 37 says to check both                                                                                                                                                           |
 
 Two further gaps that are not errors but that a human following the existing documents would fall
 into:
@@ -1817,11 +1915,23 @@ none to the Supabase project or to Vercel, so:
   204 kB is the largest route. Both documents now agree with the measurement.
 
 **Commands I wrote but did not execute.** The `Invoke-WebRequest` snippets in steps 11, 27 and 32,
-and the `Set-Clipboard` and length-check snippets in steps 5 and 6. They are ordinary PowerShell 5.1
-and I chose the forms that work on 5.1 specifically - `-UseBasicParsing` because 5.1 otherwise uses
-the Internet Explorer engine, and `try`/`catch` around the 401 case because 5.1 has no
+and the `Set-Clipboard` and length-check snippet in step 5. They are ordinary PowerShell 5.1 and I
+chose the forms that work on 5.1 specifically - `-UseBasicParsing` because 5.1 otherwise uses the
+Internet Explorer engine, and `try`/`catch` around the 401 case because 5.1 has no
 `-SkipHttpErrorCheck`. But treat the exact output shape as untested. The same applies to the
 `Invoke-WebRequest` snippet added to step 42 on 5 Aug 2026.
+
+The step 6 secret generator and its `(Get-Clipboard -Raw).Length` check **were** executed on
+5 Aug 2026, on a throwaway value that was never used and was cleared from the clipboard
+afterwards. They behave as described: nothing is printed, and the length check reports 64.
+
+**The step 7 push has not been run.** The state it describes was verified by reading it back out
+of the repository - the two commits and their placeholder author, the remote, the local TLS
+settings, `.gitattributes`, that `.env.local` is ignored, and that `git ls-remote` succeeds against
+a public repository over HTTPS. What has not happened is `git push` itself, so the authentication
+behaviour, the personal access token fallback and the SAML single sign-on case are general
+knowledge about Git Credential Manager, not observations. Nor has the CI workflow ever run; the job
+names come from `.github/workflows/ci.yml`, but no run of it exists to look at.
 
 `next build`, `prettier --check` over the whole repository, and the Vitest suite were all run on
 5 Aug 2026 and all pass; that gap is closed.
@@ -1841,7 +1951,8 @@ browser download, the streaming response, or the cascade. Step 42 says this itse
 
 ## Change History
 
-| Version | Date       | Author | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------- | ---------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0.1.0   | 2026-08-04 | Agent  | Initial draft. 48 ordered steps derived from `GO-LIVE.md`, document 33, `HANDOFF.md` and the code.                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 0.2.0   | 2026-08-05 | Agent  | Replaced the step 42 placeholder with a verification procedure for the data export and account deletion, which now exist; the step count is unchanged and no step was renumbered. Recorded in section 4 which of the listed documentation errors have since been corrected, and settled the test count by running the suite: 318 across 14 files. Section 6 updated - the build, format and test gaps are closed; the export and deletion procedure is written from the code and has never been executed. |
+| Version | Date       | Author | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------- | ---------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0.1.0   | 2026-08-04 | Agent  | Initial draft. 48 ordered steps derived from `GO-LIVE.md`, document 33, `HANDOFF.md` and the code.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 0.2.0   | 2026-08-05 | Agent  | Replaced the step 42 placeholder with a verification procedure for the data export and account deletion, which now exist; the step count is unchanged and no step was renumbered. Recorded in section 4 which of the listed documentation errors have since been corrected, and settled the test count by running the suite: 318 across 14 files. Section 6 updated - the build, format and test gaps are closed; the export and deletion procedure is written from the code and has never been executed.                                                                                                                                                                                                                                                                                                                         |
+| 0.3.0   | 2026-08-05 | Agent  | Rewrote step 6 after it caused a live `CRON_SECRET` to be echoed into a terminal, PSReadLine history and a chat transcript: it now generates a fresh URL-safe value straight to the clipboard, is never rendered, is length-checked without display, and carries a warning covering the PSReadLine history file and how to clean it. Rewrote step 7 for the resolved Git situation - portable MinGit, two commits on `main`, `origin` configured, the schannel revocation failure fixed with the OpenSSL backend and an exported CA bundle, `.gitattributes` added - leaving only the author amend and the push, with the first CI run as the confirmation. The Route A / Route B choice is gone; steps 20, 26 and 46 and the section 4 register were corrected to match. No step was renumbered and the step count is unchanged. |
