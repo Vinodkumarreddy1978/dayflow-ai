@@ -3,7 +3,7 @@
 | Field        | Value                                               |
 | ------------ | --------------------------------------------------- |
 | Document ID  | - (root operator document, outside the docs/ suite) |
-| Version      | 0.3.0                                               |
+| Version      | 0.4.0                                               |
 | Status       | Draft                                               |
 | Owner        | Founder                                             |
 | Last updated | 2026-08-05                                          |
@@ -118,9 +118,23 @@ Each step states who does it, roughly how long it takes, what to do, exactly whe
 exact value or command, and how to confirm it worked. Do not move on until the
 confirmation passes.
 
-"Operator" means you, by hand. There is nothing in this list that another agent or a
-script can do for you, because every remaining task is either a dashboard action or a
-decision.
+**Who does what, and it is not all you.** "Operator" means you, by hand: a dashboard
+action, a decision, a live secret, a real inbox or a real device. None of those can be
+handed to anyone else. Repository work can be, and an earlier version of this line
+claimed otherwise and was wrong - code, tests, documentation, the SQL of a new migration,
+and commits and pushes are all work the assistant can do without you at the keyboard. The
+test that decides it is whether the task needs a browser session on your Supabase, Vercel,
+GitHub or DNS account. Each step's **Who:** line says which of these it is:
+
+- **operator** - needs a dashboard session, a decision, a secret, an inbox or a device.
+- **assistant** - entirely inside the repository or this working copy.
+- **operator, then assistant**, or **assistant, then operator** - real work on both sides,
+  in that order.
+
+[WHO-DOES-WHAT.md](WHO-DOES-WHAT.md) is the authority on that split. It also carries the
+handoff protocol - what evidence to paste back when a step does not do what it says it
+should, and what to strip out of it first. This document is the procedure; that one is the
+ownership. Where they disagree about who does something, it wins.
 
 **On the line numbers.** Steps below cite other documents as `GO-LIVE.md lines 443-445` and
 the like. Several of those documents were corrected on 5 Aug 2026 and the citations were not
@@ -136,7 +150,8 @@ where you gather the values the later phases need.
 
 ### Step 1. Open PowerShell and put Node on the PATH
 
-**Who:** operator. **Time:** 2 minutes.
+**Who:** operator or assistant - whoever is about to run a local command. **Time:** 2
+minutes.
 
 Node is installed but not on the system PATH
 (`HANDOFF.md` lines 54-67). Run these two lines at the start of **every** new PowerShell
@@ -163,10 +178,14 @@ begins (`HANDOFF.md` lines 74-76). That is normal.
 
 ### Step 2. Confirm the working copy builds before you involve Vercel
 
-**Who:** operator. **Time:** 10 minutes, most of it waiting.
+**Who:** assistant, then operator. **Time:** 10 minutes, most of it waiting.
 
 A build that fails on Vercel is much harder to diagnose than the same failure locally.
-Prove it builds here first. Because the project is inside OneDrive, use this exact recipe
+Prove it builds here first. Both commands in this step are repository work and the
+assistant can run them for you - it did, on 5 August 2026, and both passed. What stays
+yours is the gate they exist for: do not create the Vercel project in step 20 until one of
+you has seen this build pass on the current tree. Because the project is inside OneDrive,
+use this exact recipe
 
 - OneDrive turns files inside `.next` into cloud placeholders while the build is still
   reading them, and the resulting errors look like code faults and are not
@@ -206,7 +225,7 @@ own build with its own variables, and that build can fail where this one passed.
 
 ### Step 3. Decide the production origin and write it down
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator - this is a decision. **Time:** 5 minutes.
 
 This is the value from section 2.2. Decide now whether you are deploying to a
 Vercel-assigned domain such as `https://dayflow-ai.vercel.app` or to a custom domain such
@@ -234,7 +253,7 @@ time and are not read at runtime (`src/lib/public-env.ts` lines 4-10).
 
 ### Step 4. Decide whether reminders are in scope for this deploy
 
-**Who:** operator. **Time:** 2 minutes.
+**Who:** operator - this is a decision. **Time:** 2 minutes.
 
 See section 2.4. Write down "push: yes" or "push: no".
 
@@ -245,7 +264,8 @@ Vercel entirely - `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` both have defaults in
 
 ### Step 5. Check the VAPID key pair (skip if push is out of scope)
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** assistant for the length check, operator if a new pair has to be generated.
+**Time:** 5 minutes.
 
 A key pair already exists in your local `.env.local`. I confirmed the shape of the values
 without reading them: `NEXT_PUBLIC_VAPID_PUBLIC_KEY` is 87 characters, which is exactly what
@@ -262,7 +282,10 @@ npm run vapid:generate
 ```
 
 It prints `NEXT_PUBLIC_VAPID_PUBLIC_KEY=...` and `VAPID_PRIVATE_KEY=...` ready to paste
-(`scripts/generate-vapid-keys.mjs` lines 13-25).
+(`scripts/generate-vapid-keys.mjs` lines 13-25). **Run it yourself rather than asking the
+assistant to.** It renders a private key into the terminal, which puts it in the scrollback
+and, if you then retype any of it, in the PSReadLine history file - the exact exposure step
+6 exists to prevent. The clean-up in step 6 applies here too.
 
 **Confirm it worked:** the public key is 87 characters, or 88 if it ends in `=`. Both are
 accepted (`src/lib/env.ts` line 26). To check the length without printing the key:
@@ -273,7 +296,9 @@ accepted (`src/lib/env.ts` line 26). To check the length without printing the ke
 
 ### Step 6. Generate the production `CRON_SECRET` without ever displaying it
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator, and only the operator. This is a live secret, it never leaves your
+clipboard, and it must never be handed to the assistant, put in a file, or pasted into a
+chat. **Time:** 5 minutes.
 
 You need this exact string twice: in Vercel (step 24) and in the Supabase Vault (step 31).
 They are compared byte for byte, and a mismatch produces a 401 that only appears in Vercel's
@@ -338,42 +363,56 @@ one in `.env.local` means the Vault secret in step 31 must hold the **production
 your local machine can then no longer successfully call the production cron endpoints by
 hand. That is the correct trade-off; just know which value you are holding.
 
-### Step 7. Push the repository to GitHub
+### Step 7. The repository is pushed - read the first CI run
 
-**Who:** operator. **Time:** 15 minutes, plus however long the first CI run takes.
+**Who:** operator, then assistant. **Time:** 5 minutes of reading, plus however long the
+first CI run takes.
 
-**Most of this step is already done.** An earlier version of this document described Git as
-not installed and offered a Vercel-CLI route around it. That is no longer the situation. As
-of 5 August 2026, verified by running the commands:
+**The push has happened. Nothing about it is pending.** Earlier versions of this document
+described Git as not installed, and then as a portable MinGit with two local commits and no
+upstream. Both are out of date. As of 5 August 2026, verified by running the commands:
 
-- A portable **MinGit 2.55.0.windows.3** is unpacked at
-  `%LOCALAPPDATA%\dayflow-toolchain\MinGit-2.55.0.3-64-bit\cmd\git.exe`. It sits under your
-  own profile, needs no administrator rights, and is on neither the machine nor the user
-  PATH, so, exactly like Node in step 1, you enable it per session.
-- This working copy is a Git repository on branch `main` with two commits: `f54864f`, a
-  baseline snapshot of the tree, and `1b0ef44`, the verified commit that adds the data
-  export, account deletion, structured logging and error boundaries.
-- `origin` is configured and points at
-  `https://github.com/Vinodkumarreddy1978/dayflow-ai.git`, a private repository that already
-  exists.
-- Git over HTTPS works through the corporate TLS interception, which took a fix - see below.
+- **Git for Windows 2.55.0.windows.3** is installed at
+  `%LOCALAPPDATA%\Programs\Git\cmd\git.exe`. It is a user-scope install, it needed no
+  administrator rights, and it **is** on your user PATH - so plain `git` works in a new
+  PowerShell window with no prefix and nothing to enable. Unlike Node in step 1, there is
+  no per-session line to run. A window opened before the install still has the old PATH;
+  open a new one.
+- Branch `main` holds three commits - `f54864f`, a baseline snapshot of the tree,
+  `1b0ef44`, which adds the data export, account deletion, structured logging and error
+  boundaries, and `eff2173`, which rewrote step 6 of this document - and it **tracks
+  `origin/main` at `eff2173`, with nothing ahead and nothing behind**. `git status -sb`
+  reports `## main...origin/main` and `git show-ref` lists `refs/remotes/origin/main` at the
+  same commit as `refs/heads/main`.
+- `origin` is `https://github.com/Vinodkumarreddy1978/dayflow-ai.git`, a private repository.
+- **The GitHub credential is cached**, by Git Credential Manager in Windows Credential
+  Manager (`credential.helper=manager`). An unattended `git ls-remote` against that private
+  repository returns its refs with no sign-in prompt, which means **the assistant can commit
+  and push without you.** You do not have to be at the keyboard for a repository fix to
+  reach GitHub, and nothing later in this document waits on you to run a push.
 - `.gitattributes` was added in `1b0ef44`, pinning `* text=auto eol=lf`. It is load-bearing:
-  `core.autocrlf` is `true` in MinGit's own system configuration and `.prettierrc` sets
-  `endOfLine: "lf"`, so without it a clone on Windows checks out CRLF and
+  `core.autocrlf` is `true` in Git for Windows' own system configuration and `.prettierrc`
+  sets `endOfLine: "lf"`, so without it a clone on Windows checks out CRLF and
   `npx prettier --check .` then fails on every file.
+- Secrets stayed out of it. `.gitignore` line 31 excludes `.env*.local`, so `.env.local` is
+  not tracked; the only environment file in the repository is `.env.example`.
 
-Two things are left: replacing the placeholder commit author, and the push itself. Nothing
-has been pushed - `git show-ref` lists only `refs/heads/main`, and the branch has no
-upstream.
+**The placeholder commit author stays, and that is a decision rather than an omission.** All
+three commits are authored `DayFlowAI Developer <developer@example.com>`. An earlier version
+of this document told you to fix that with `git commit --amend --reset-author`, which was
+reasonable while nothing had been pushed. It has been pushed, so the same command would now
+rewrite published history and need a force push, and the benefit is cosmetic on a private
+repository with one contributor. **Do not run it.** If you want your own name on future
+commits, set `git config --local user.name` and `user.email` and it applies from the next
+commit onwards, leaving the three that exist alone.
 
 **The TLS fix, so you know what is holding this together.** Every HTTPS operation initially
 failed with `CRYPT_E_NO_REVOCATION_CHECK (0x80092012)`. The cause is that the PwC perimeter
 appliance re-issues certificates carrying no CRL distribution point and no OCSP responder,
 so schannel's revocation check can never succeed, and `http.schannelCheckRevoke=false` does
-not suppress it in this MinGit build - that setting is still present in the local
-configuration, left over from the attempt, and does nothing. The fix was to move this
-repository onto MinGit's bundled OpenSSL backend with a CA bundle exported from the Windows
-root store:
+not suppress it - that setting is still present in the local configuration, left over from
+the attempt, and is inert. The fix was to move this repository onto Git's bundled OpenSSL
+backend with a CA bundle exported from the Windows root store:
 
 | Setting           | Value                                                               |
 | ----------------- | ------------------------------------------------------------------- |
@@ -382,54 +421,29 @@ root store:
 
 This is not a "turn verification off" workaround. Certificate chain and hostname
 verification remain on; `http.sslVerify` was never touched and is at its default of `true`.
-Confirmed with `git ls-remote` against a public repository, which returns its full ref list -
-5280 refs - instead of an error.
+It is confirmed by more than a `ls-remote` now: three commits reached the private repository
+over this configuration.
 
-**Now do the remaining work.** In a new PowerShell window:
+**What is left for you: read the first CI run.** Pushing `main` started GitHub Actions for
+the first time in this project's history, and that result is the only part of this step still
+outstanding.
 
-```powershell
-$env:Path = "$env:LOCALAPPDATA\dayflow-toolchain\MinGit-2.55.0.3-64-bit\cmd;$env:Path"
-cd "C:\Users\preddy111\OneDrive - PwC\Documents\DayFlowAI"
-git config --local user.name "Your Real Name"
-git config --local user.email "you@example.com"
-git commit --amend --reset-author --no-edit
-git push -u origin main
-```
+**Where:** GitHub → the repository → the **Actions** tab.
 
-**What the amend actually does.** Both commits were authored as
-`DayFlowAI Developer <developer@example.com>`, a placeholder. `--reset-author` rewrites the
-top commit with the identity you just configured and `--no-edit` keeps its message
-unchanged. Rewriting a commit changes its hash, so `1b0ef44` becomes a different id. That is
-safe here **only** because nothing has been pushed and nobody else holds a copy; after a
-push the same command would need a force push and would break anyone who had pulled. Note
-that this fixes the top commit only. `f54864f` keeps the placeholder author unless you choose
-to squash the two commits into one, which is reasonable and is not required.
-
-**The push is interactive - do not start it and walk away.** Git Credential Manager opens a
-browser window or a sign-in dialog the first time. Two things commonly go wrong on a
-corporate machine:
-
-- If policy blocks the browser OAuth flow, create a personal access token on GitHub with the
-  `repo` scope and paste it when Git asks for a password.
-- If the repository sits under an organisation that enforces SAML single sign-on, the token
-  must also be authorised for that organisation. Until it is, the push fails with a message
-  saying the repository does not exist or that you lack permission, which reads like a wrong
-  URL and is not.
-
-Before pushing, satisfy yourself the secrets stay out of it. `.gitignore` line 31 excludes
-`.env*.local`, so `.env.local` is not tracked; the only environment file in the repository is
-`.env.example`.
+`.github/workflows/ci.yml` triggers on pushes to `main` and defines four jobs: `verify`
+(format, lint, unit tests, build, type check, bundle budget) at lines 28-100, `audit` at
+lines 102-128, `e2e` at lines 130-164, and `migrations` at lines 166-245. Only you can see
+the run - the assistant cannot open GitHub - so read it and paste any failing job's log
+back. The fix is repository work, and the assistant can make it and push it without you.
 
 **Confirm it worked:**
 
-- The GitHub repository page shows your files, and the top commit carries **your** name and
-  its new hash rather than `DayFlowAI Developer`.
+- The GitHub repository page shows your files on branch `main`, with `eff2173` on top. The
+  commits carry `DayFlowAI Developer`, which is expected and settled - see above.
 - Searching that repository for `SUPABASE_SERVICE_ROLE_KEY` finds it only in `.env.example`
   and in documentation, never with a real value beside it.
-- **The Actions tab shows the CI workflow running, for the first time ever.** This is the one
-  worth waiting for. `.github/workflows/ci.yml` triggers on pushes to `main` and defines four
-  jobs: `verify` (format, lint, tests, build, type check, bundle budget), `audit`, `e2e` and
-  `migrations`.
+- **The Actions tab has a run against `eff2173`.** This is the one worth waiting for. Read
+  all four jobs, not only the first red one.
 
 **Expect that first run to be informative rather than green, and do not read a failure as a
 disaster.** Every check that has passed so far passed on one warm Windows machine with an
@@ -446,14 +460,27 @@ machine, another folder on this one - starts again with schannel and fails the s
 point-in-time export of the Windows root store: if PwC rotates or adds a root certificate,
 regenerate it or Git starts rejecting certificates it should accept.
 
-**Not the chosen path, noted only for someone in a different situation:** Vercel's CLI can
-deploy this directory with no Git at all (`npx vercel login`, `npx vercel link`,
-`npx vercel --prod`), at the cost of CI, preview deployments, automatic deploys and version
-history.
+**If the cached credential ever stops working**, which happens when a token expires or is
+revoked, Git Credential Manager will prompt again and two things commonly go wrong on a
+corporate machine. If policy blocks the browser OAuth flow, create a personal access token on
+GitHub with the `repo` scope and paste it when Git asks for a password. If the repository is
+ever moved under an organisation that enforces SAML single sign-on, the token must also be
+authorised for that organisation; until it is, the push fails with a message saying the
+repository does not exist or that you lack permission, which reads like a wrong URL and is
+not.
+
+**Two leftovers, so you do not mistake either for something to do.** The portable **MinGit
+2.55.0.windows.3** at `%LOCALAPPDATA%\dayflow-toolchain\MinGit-2.55.0.3-64-bit\cmd` is still
+unpacked. It is on no PATH, nothing uses it, and it is redundant now that a real Git for
+Windows is installed - ignore it or delete it, but do not put it on a PATH. And Vercel's CLI
+can deploy this directory with no Git at all (`npx vercel login`, `npx vercel link`,
+`npx vercel --prod`); that was the escape route while Git looked unavailable, it costs CI,
+preview deployments, automatic deploys and version history, and it is not the chosen path.
 
 ### Step 8. Start the custom email sender now, because DNS takes time
 
-**Who:** operator. **Time:** 20-60 minutes of work, then up to several hours of DNS waiting.
+**Who:** operator - needs accounts at a mail provider and your DNS registrar. **Time:**
+20-60 minutes of work, then up to several hours of DNS waiting.
 
 Do this early even though it is not needed until step 29, because verifying a sending domain
 means adding DNS records and waiting for them.
@@ -492,7 +519,8 @@ trusting the path. Treat every Supabase path in this document the same way.
 
 ### Step 9. Read this before you touch the API keys page
 
-**Who:** operator. **Time:** 3 minutes of reading.
+**Who:** operator - this is your briefing for steps 10 to 12, which only you can perform.
+**Time:** 3 minutes of reading.
 
 `SUPABASE_SERVICE_ROLE_KEY` was pasted into a chat transcript
 (`HANDOFF.md` line 135, `GO-LIVE.md` lines 40-43). A value that has been pasted anywhere must
@@ -516,7 +544,7 @@ first revokes it instantly and gives you a window where nothing works
 
 ### Step 10. Create a new secret key
 
-**Who:** operator. **Time:** 3 minutes.
+**Who:** operator - Supabase dashboard. **Time:** 3 minutes.
 
 **Where:** Supabase dashboard → your project → **Project Settings** → **API Keys**, on the tab
 holding the publishable and secret keys. `HANDOFF.md` line 135 and `README.md` line 172 call
@@ -534,7 +562,7 @@ key in full only once.
 
 ### Step 11. Put the new key in `.env.local` and prove it works
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator - this handles a live secret, so do not delegate it. **Time:** 5 minutes.
 
 Open `C:\Users\preddy111\OneDrive - PwC\Documents\DayFlowAI\.env.local` in an editor and
 replace the value of `SUPABASE_SERVICE_ROLE_KEY`. Change nothing else.
@@ -565,7 +593,7 @@ Stop the dev server afterwards with `Ctrl+C`.
 
 ### Step 12. Revoke the old key, then sweep every other copy - IRREVERSIBLE
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator - Supabase dashboard, and a live secret. **Time:** 5 minutes.
 
 **This cannot be undone.** Deleting a secret key in Supabase revokes it immediately. Anything
 still using it - another machine, a saved script, a scratch file - breaks at that instant with
@@ -606,7 +634,8 @@ and then verifies the whole schema.
 
 ### Step 13. Confirm for yourself what is already applied
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator - the SQL is written for you below, but only you can run it. **Time:** 5
+minutes.
 
 Do not take the documentation's word for it. `0014` and `0015` add functions and nothing else,
 so their presence or absence is directly observable.
@@ -646,11 +675,15 @@ select count(*) as cron_jobs from cron.job;
 
 ### Step 14. Decide which SQL to run: the two individual files, not the bundle
 
-**Who:** operator. **Time:** 3 minutes of reading. No action.
+**Who:** assistant - this is a reading of the repository, and it is done. **Time:** 1 minute
+to take the conclusion.
 
 This repository contains both individual migration files and a generated bundle, and the
-existing documents do not tell you unambiguously which to use in your situation. Here is the
-answer.
+existing documents do not tell you unambiguously which to use in your situation. Working out
+which is repository work: it means reading the two migration files, the bundle generator, the
+bundle's own header and the CI workflow, none of which needs an account anywhere. The
+assistant has done that. All you need from this step is the conclusion, and then the paste in
+steps 15 and 16. The reasoning is here so you can check it rather than take it on trust.
 
 **Run the two individual files, `0014_scheduled_report_support.sql` then
 `0015_account_deletion.sql`, in that order. Do not run `supabase/all-migrations.sql`.**
@@ -658,15 +691,19 @@ answer.
 Why:
 
 - `supabase/all-migrations.sql` is a generated concatenation of all fifteen migrations
-  (`scripts/build-all-migrations.mjs` lines 24-56). It exists for someone provisioning a
-  **brand new, empty** project through the dashboard, so that they paste one file instead of
-  fifteen. That is not your situation: thirteen of the fifteen are already applied.
-- Its header does say it is safe to re-run (lines 14-18 of the bundle), and CI does prove
-  idempotency by applying every migration twice against an empty database
-  (`.github/workflows/ci.yml` lines 208-218). But CI **skips `0011_scheduled_jobs.sql`** in both
-  passes (lines 199-204), so full-bundle idempotency has never actually been demonstrated for
-  the one migration that touches `pg_cron`. Re-running thirteen unnecessary migrations against
-  your live database to apply two is risk with no upside.
+  (`scripts/build-all-migrations.mjs` lines 60-77, under a header built at lines 26-58). It
+  exists for someone provisioning a **brand new, empty** project through the dashboard, so
+  that they paste one file instead of fifteen. That is not your situation: thirteen of the
+  fifteen are already applied.
+- Its header does say it is safe to re-run (lines 14-18 of the bundle), and CI's `migrations`
+  job is written to prove idempotency by applying every migration twice against an empty
+  database - once at `.github/workflows/ci.yml` lines 187-232 and again at lines 234-244.
+  Written to, not shown to: no CI run has ever completed, so that job has never yet reported
+  anything. And even taken at face value it proves less than it appears to, because CI
+  **skips `0011_scheduled_jobs.sql`** in both passes (lines 228-230 and 240-242), so
+  full-bundle idempotency has never actually been demonstrated for the one migration that
+  touches `pg_cron`. Re-running thirteen unnecessary migrations against your live database to
+  apply two is risk with no upside.
 - The Supabase CLI route (`supabase db push`, which
   `docs/05-engineering/33-cicd-and-deployment-runbook.md` line 114 and `README.md` line 212 both
   recommend) would also work and would track which migrations are applied. It needs the CLI
@@ -683,7 +720,8 @@ fifteen migrations. That documentation is a version behind; the directory listin
 
 ### Step 15. Apply `0014_scheduled_report_support.sql`
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator - the SQL exists in the repository; you are the only one who can run it
+against the live project. **Time:** 5 minutes.
 
 **What it does.** It adds two functions and no tables, so it creates no new row level security
 surface:
@@ -744,7 +782,7 @@ where routine_schema = 'public'
 
 ### Step 16. Apply `0015_account_deletion.sql` - creates a destructive capability
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator - same as step 15, and this one is irreversible. **Time:** 5 minutes.
 
 **Read this before running it.** This migration creates `public.delete_account()`, which
 destroys an entire account in one transaction: every Moment, category, category group, goal,
@@ -814,7 +852,7 @@ free tier there is no point-in-time recovery to fall back on
 
 ### Step 17. Verify row level security on every table
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator - SQL Editor. **Time:** 5 minutes.
 
 Neither migration you just applied creates a table, so this should be unchanged - which is
 exactly why it is worth checking now, while you know what the answer should be.
@@ -853,7 +891,7 @@ or error with a permission message.
 
 ### Step 18. Confirm the extensions and the two scheduled jobs
 
-**Who:** operator. **Time:** 3 minutes.
+**Who:** operator - SQL Editor. **Time:** 3 minutes.
 
 **Where:** SQL Editor.
 
@@ -885,7 +923,7 @@ later in this list, after you know the deployed URL.
 
 ### Step 19. Confirm the realtime publication
 
-**Who:** operator. **Time:** 2 minutes.
+**Who:** operator - SQL Editor. **Time:** 2 minutes.
 
 Two-device sync does not work until the tables are explicitly published, and the failure is
 silent: the channel subscribes, nothing errors, and changes simply never arrive
@@ -919,7 +957,7 @@ propagate (lines 31-41 of that migration).
 
 ### Step 20. Create the Vercel project
 
-**Who:** operator. **Time:** 10 minutes.
+**Who:** operator - Vercel dashboard. **Time:** 10 minutes.
 
 **Where:** [vercel.com](https://vercel.com) → **Add New** → **Project**.
 
@@ -938,7 +976,7 @@ and that first build fails naming `NEXT_PUBLIC_APP_URL`, that is expected - it i
 
 ### Step 21. Confirm the real production URL
 
-**Who:** operator. **Time:** 3 minutes.
+**Who:** operator - Vercel dashboard. **Time:** 3 minutes.
 
 **Where:** Vercel dashboard → your project → **Settings** → **Domains**, or the **Domains**
 panel on the project overview.
@@ -955,7 +993,7 @@ domain as your value. Changing this later means redoing steps 23, 28 and 30 and 
 
 ### Step 22. Check the build settings
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator - Vercel dashboard. **Time:** 5 minutes.
 
 **Where:** Vercel dashboard → your project → **Settings** → **Build and Deployment** (Vercel has
 also called this **General**; the exact heading changes).
@@ -978,7 +1016,7 @@ step 2 is a local problem only; Vercel's build machines have no sync client and 
 
 ### Step 23. Add the non-secret environment variables
 
-**Who:** operator. **Time:** 10 minutes.
+**Who:** operator - Vercel dashboard. **Time:** 10 minutes.
 
 **Where:** Vercel dashboard → your project → **Settings** → **Environment Variables**.
 
@@ -1014,7 +1052,8 @@ slash. That single character is the most common cause of a broken first deploy.
 
 ### Step 24. Add the secret environment variables
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator, and only the operator - every value here is a live secret. **Time:** 5
+minutes.
 
 Same page. Mark each of these **Sensitive**, per
 `docs/05-engineering/32-environment-and-configuration.md` section 3.
@@ -1040,7 +1079,8 @@ three.
 
 ### Step 25. Attach a custom domain (optional)
 
-**Who:** operator. **Time:** 10 minutes, plus DNS propagation.
+**Who:** operator - Vercel dashboard and your DNS registrar. **Time:** 10 minutes, plus DNS
+propagation.
 
 Skip this if you are using the Vercel-assigned domain.
 
@@ -1062,9 +1102,12 @@ custom domain too. Check it in step 27.
 
 ### Step 26. Trigger the first production deploy
 
-**Who:** operator. **Time:** 5 minutes, mostly the build.
+**Who:** operator, then assistant. **Time:** 5 minutes, mostly the build.
 
-Vercel dashboard → **Deployments** → redeploy the latest, or push a commit to `main`.
+Vercel dashboard → **Deployments** → redeploy the latest, or push a commit to `main` - and
+since the GitHub credential is cached (step 7), the assistant can supply that commit and push
+it, so "push something to trigger a deploy" is no longer a reason to wait for you. What only
+you can do is read the build log, and then a fix for what it names is repository work again.
 
 **Confirm it worked:** the deployment reaches **Ready**. Open the build log and check that it
 compiled without an error and printed a route table.
@@ -1094,9 +1137,12 @@ not read a green build as proof that the server variables are right. Step 32 is 
 
 ### Step 27. Confirm the deployment serves, and that the security headers arrive
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator, then assistant. **Time:** 5 minutes.
 
-Open `https://your-domain` in a browser. You should get the landing page.
+Open `https://your-domain` in a browser. You should get the landing page. Everything after
+that is an unauthenticated HTTP request against a public URL, so once you have told the
+assistant the domain, it can run the header and status-code checks below itself - no dashboard
+session is involved.
 
 Then check the headers, because a policy that a proxy strips is no policy at all. PowerShell 5.1
 equivalent of the `curl` command in `GO-LIVE.md` line 622:
@@ -1142,7 +1188,7 @@ uses the Internet Explorer engine, but treat the exact output shape as untested.
 
 ### Step 28. Set the Site URL and the redirect allow-list - both in this one step
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator - Supabase dashboard. **Time:** 5 minutes.
 
 **Where:** Supabase dashboard → your project → **Authentication** → **URL Configuration**.
 
@@ -1183,7 +1229,7 @@ absence of a trailing slash. Real confirmation comes in steps 33 and 38.
 
 ### Step 29. Turn Confirm email on - this changes sign-up behaviour immediately
 
-**Who:** operator. **Time:** 3 minutes.
+**Who:** operator - Supabase dashboard. **Time:** 3 minutes.
 
 Confirm email is currently **off**, which is correct for development and wrong for anything
 reachable from the internet (`HANDOFF.md` line 139).
@@ -1211,7 +1257,7 @@ of the settings most likely to be turned off during debugging and never turned b
 
 ### Step 30. Create the Vault secret `dayflow_app_url`
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator - SQL Editor. **Time:** 5 minutes.
 
 `pg_cron` runs inside Supabase's network. It cannot reach `localhost` and it cannot reach your
 laptop at all. Until `dayflow_app_url` names the deployed site, the scheduled jobs run and do
@@ -1273,7 +1319,7 @@ Check the last character is not `/`.
 
 ### Step 31. Create the Vault secret `dayflow_cron_secret`
 
-**Who:** operator. **Time:** 3 minutes.
+**Who:** operator, and only the operator - this pastes a live secret. **Time:** 3 minutes.
 
 **Where:** the same SQL Editor session.
 
@@ -1310,7 +1356,7 @@ step 32.
 
 ### Step 32. Prove `invoke_cron_endpoint` actually reaches the deployed application
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator - SQL Editor, and the secret. **Time:** 5 minutes.
 
 This is the step that catches every URL and secret mismatch at once, and it is the step most
 runbooks leave out.
@@ -1385,9 +1431,16 @@ dangerous failure looks perfectly healthy (`GO-LIVE.md` lines 407-413).
 This is `GO-LIVE.md` section 3.3 and section 4.3 of the deployment runbook, in one order, with the
 confirmations spelled out. Use a real email address you control.
 
+**Every step in this phase is yours to perform**, and that is not stale ownership - each one
+needs a real person, a real inbox, a real device or a dashboard, and repository access
+substitutes for none of them. What the assistant can do here is work out why one failed: every
+step below already says what a given failure means, and `WHO-DOES-WHAT.md` section 4 lists what
+evidence to paste back and what to strip out of it before you do. Performing these is not
+delegable. Diagnosing them nearly always is.
+
 ### Step 33. Sign up
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator - needs a real inbox. **Time:** 5 minutes.
 
 Go to `https://your-domain`, then **Sign up**. Use a real address.
 
@@ -1409,7 +1462,7 @@ allow-list from step 28 is wrong.
 
 ### Step 34. Check that seeding worked
 
-**Who:** operator. **Time:** 3 minutes.
+**Who:** operator - Supabase dashboard. **Time:** 3 minutes.
 
 **Where:** Supabase dashboard → **Table Editor**.
 
@@ -1427,7 +1480,7 @@ metadata and is stored by that trigger (`README.md` lines 334-336).
 
 ### Step 35. Record an activity and close it
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator - needs a signed-in session in the live application. **Time:** 5 minutes.
 
 On `/dashboard`, record an activity, then close it.
 
@@ -1436,7 +1489,7 @@ correct and the pending queue empties.
 
 ### Step 36. Confirm the queue refusal
 
-**Who:** operator. **Time:** 3 minutes.
+**Who:** operator - needs a signed-in session. **Time:** 3 minutes.
 
 Start two activities and leave both open, then try to start a third.
 
@@ -1450,7 +1503,7 @@ Close them both before moving on.
 
 ### Step 37. Confirm two-device sync
 
-**Who:** operator. **Time:** 5 minutes. Needs a second device.
+**Who:** operator - needs two real devices. **Time:** 5 minutes.
 
 Sign in on your phone alongside your laptop, both on `https://your-domain`.
 
@@ -1464,7 +1517,7 @@ current Supabase dashboards replication settings generally live under **Database
 
 ### Step 38. Confirm password reset lands on the right form
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator - needs a real inbox. **Time:** 5 minutes.
 
 Sign out. Go to `/reset-password` and request a reset for your address.
 
@@ -1485,7 +1538,8 @@ loop, that is a genuine finding rather than a configuration error - record it.
 
 ### Step 39. Confirm the route guards
 
-**Who:** operator. **Time:** 3 minutes.
+**Who:** operator - needs a browser session, signed out and then signed in. **Time:** 3
+minutes.
 
 Signed out, in a private browsing window, visit each of these on your live domain.
 
@@ -1512,7 +1566,7 @@ unverified until now, so this is a first.
 
 ### Step 40. Confirm a reminder fires on a real device (skip if push is out of scope)
 
-**Who:** operator. **Time:** 10 minutes. Needs a phone.
+**Who:** operator - needs a phone in your hand. **Time:** 10 minutes.
 
 Push cannot be verified meaningfully in a desktop browser tab, because the things that break are
 device-specific (`GO-LIVE.md` lines 443-445).
@@ -1537,7 +1591,8 @@ symptom to look for (`GO-LIVE.md` lines 460-463).
 
 ### Step 41. Check the logs, then check again tomorrow morning
 
-**Who:** operator. **Time:** 5 minutes now, 5 minutes tomorrow.
+**Who:** operator - Vercel logs and the SQL Editor. **Time:** 5 minutes now, 5 minutes
+tomorrow.
 
 **Where:** Vercel dashboard → your project → **Logs** (also reachable per deployment under
 **Functions**).
@@ -1569,7 +1624,8 @@ received anything. The end-to-end proof is step 32 plus a reminder actually arri
 
 ### Step 42. Verify the data export and account deletion - IRREVERSIBLE second half
 
-**Who:** operator. **Time:** 30 minutes. **Needs:** a throwaway account, and step 16 completed.
+**Who:** operator - needs a real signed-in session and a real inbox for the throwaway account.
+**Time:** 30 minutes. **Needs:** a throwaway account, and step 16 completed.
 
 Both features now exist: `src/features/settings/data-export-card.tsx` and
 `delete-account-card.tsx` on the Settings screen, `/api/export` behind the first and
@@ -1701,7 +1757,8 @@ deletion, email reusable - as the point of the step.
 
 ### Step 43. Take your first export, and set a weekly reminder
 
-**Who:** operator. **Time:** 15 minutes, then 5 minutes a week.
+**Who:** operator - needs the Supabase CLI signed in and linked to your project, and your own
+calendar. **Time:** 15 minutes, then 5 minutes a week.
 
 On the free tier this is not housekeeping. Point-in-time recovery is a paid feature and automated
 daily backups are not part of the free plan either, so a dump you took yourself is the whole of your
@@ -1728,7 +1785,7 @@ document that protects against a mistake you make yourself.
 
 ### Step 44. Watch four things
 
-**Who:** operator. **Time:** 5 minutes a week.
+**Who:** operator - all four signals live in dashboards. **Time:** 5 minutes a week.
 
 From `GO-LIVE.md` lines 557-562:
 
@@ -1744,7 +1801,8 @@ evidence the same day (`GO-LIVE.md` lines 361-365).
 
 ### Step 45. Know that a quiet free project gets paused
 
-**Who:** operator. **Time:** 2 minutes of reading.
+**Who:** operator - only you get the warning email and only you can press **Resume project**.
+**Time:** 2 minutes of reading.
 
 Supabase pauses a free project after roughly a week of insufficient activity, warns you by email
 first, and requires you to press **Resume project** in the dashboard. A paused project is completely
@@ -1758,25 +1816,34 @@ stop, look at the project before concluding the application is broken.
 
 ### Step 46. Turn on Dependabot alerts
 
-**Who:** operator. **Time:** 5 minutes.
+**Who:** operator - GitHub repository settings. **Time:** 5 minutes.
 
 **Where:** GitHub → the repository → **Settings** → **Advanced Security** or **Code security**.
 
-`.github/workflows/ci.yml` lines 89-102 runs `npm audit --audit-level=high` as its own job, which
-covers high and critical advisories on pull requests and deliberately gates nothing. Dependabot is
-the only one of these that finds you rather than waiting to be asked
-(`GO-LIVE.md` lines 544-545). Low and moderate advisories remain a monthly manual `npm audit`.
+The `audit` job at `.github/workflows/ci.yml` lines 102-128 runs `npm audit --audit-level=high`
+as a job of its own, which covers high and critical advisories on pushes to `main` and on pull
+requests and deliberately gates nothing - it declares no `needs` and nothing declares a `needs`
+on it, so a red `audit` blocks no other job. Dependabot is the only one of these that finds you
+rather than waiting to be asked (`GO-LIVE.md` lines 544-545). Low and moderate advisories remain
+a monthly manual `npm audit`.
 
 **Confirm it worked:** the repository's security tab lists Dependabot alerts as enabled.
 
 ### Step 47. Write down what you actually did
 
-**Who:** operator. **Time:** 15 minutes.
+**Who:** operator, then assistant. **Time:** 5 minutes of reporting for you, then it is out of
+your hands.
 
 Several statements in the repository documents stopped being true when you finished step 32. Correct
 them while you remember, because the governing principle in
 `docs/00-governance/01-documentation-index-and-standards.md` section 2 is that documentation is the
 source of truth and a disagreement is a defect.
+
+**Your half is reporting; the editing is not yours.** Only you know what actually happened - which
+migrations you ran, what the dashboard said, which optional steps you skipped. Once you have said
+so, the edits are ordinary repository work: the assistant makes them, commits them and pushes them
+without you. Do this phase by phase rather than saving it to the end, because the statements go
+stale as you work and the details are easiest to report the day you did them.
 
 At minimum:
 
@@ -1794,7 +1861,7 @@ them.
 
 ### Step 48. Re-run the row level security check after every schema change
 
-**Who:** operator. **Time:** 2 minutes, each time.
+**Who:** operator - SQL Editor. **Time:** 2 minutes, each time.
 
 A new table does not get row level security by default, and a migration that adds one is the exact
 moment this gets forgotten (`GO-LIVE.md` lines 280-281). Re-run the query from step 17 after every
@@ -1815,23 +1882,23 @@ it is fixed makes it impossible to tell "verified and corrected" from "never loo
 numbers in the Source column point at the file **as it was when the error was found**, so they will
 not line up with a corrected file.
 
-| Source                                                          | What it says                                                                            | What is actually true                                                                                                                                                                                                                                                                                                            |
-| --------------------------------------------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 100-101 | `0011` reads Vault "at apply time", so the secrets must exist before the migrations run | `0011` only defines `invoke_cron_endpoint`, which reads Vault when **called** (lines 38-42). The file's own header says "read at run time" (lines 10-11). The stated ordering is unnecessary                                                                                                                                     |
-| `GO-LIVE.md` 235-237                                            | Section 4.1 of the runbook calls the secrets `app_url` and `cron_secret`                | **Applied 5 Aug 2026.** The runbook was corrected to `dayflow_app_url` / `dayflow_cron_secret` in its version 0.1.1, and `GO-LIVE.md` section 5 already recorded that as closed - so section 1.6 was contradicting its own section 5. It now states the names plainly                                                            |
-| `HANDOFF.md` 255                                                | `/api/reports/generate` depends on `0014`                                               | **Applied 5 Aug 2026.** It does not. That route omits the user id, taking the `get_period_facts` branch from `0010` (`src/lib/ai/report.ts` 56-63). `/api/cron/daily-report` passes a user id and is what needs `get_period_facts_for_user` from `0014`                                                                          |
-| `README.md` 218-225, 229-244                                    | Run `0001` through `0013`, "thirteen files"; the table stops at `0014`                  | There are fifteen migrations, `0001` through `0015`                                                                                                                                                                                                                                                                              |
-| `README.md` 400-407, runbook 126                                | "Push this repository to GitHub", "import the repository"                               | **No longer stale, and nearly satisfied.** A portable MinGit was installed and the tree committed on 4 Aug 2026 (`f54864f`, then `1b0ef44`), `origin` now points at the private GitHub repository, and Git over HTTPS works through the corporate TLS interception. Only the push itself is outstanding. Step 7 is the procedure |
-| `scripts/build-all-migrations.mjs` 11                           | `npm run db:bundle:check` "is what CI runs"                                             | **Corrected in the script, still true of CI.** The header comment now says nothing runs it, and `HANDOFF.md` no longer repeats the claim. `.github/workflows/ci.yml` still has no such step, so the check happens only when somebody remembers                                                                                   |
-| `GO-LIVE.md` 429-436, 502-503, 621-622                          | `curl -i -X POST ...`, `date +%Y-%m-%d`, `grep`                                         | **Applied 5 Aug 2026.** Bash. In PowerShell 5.1 `curl` is an alias for `Invoke-WebRequest` and rejects those flags. Each snippet in `GO-LIVE.md` now carries a note pointing at the PowerShell equivalent here, in steps 32, 43 and 27 respectively                                                                              |
-| `GO-LIVE.md` 139, 159-160                                       | The redirect target comes from `auth-form.tsx` and `reset-password-form.tsx`            | **Applied 5 Aug 2026.** Both redirect strings are in `src/features/auth/auth-operations.ts` lines 33 and 45. Those form files exist but the calls were moved out of them so the Supabase client could load lazily                                                                                                                |
-| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 121-122 | Configure redirect URLs "including `/auth/callback`"                                    | Insufficient on its own. Without the `/auth/callback**` wildcard entry, password reset silently lands on the landing page. `GO-LIVE.md` 133-144 explains it; the runbook does not mention it                                                                                                                                     |
-| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 116-117 | `supabase db push` "includes `0012` and `0014`"                                         | Does not mention `0015`, which is also pending and which is what makes account deletion possible at all                                                                                                                                                                                                                          |
-| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 43-53   | The CI job table                                                                        | Omits the `audit` job that `.github/workflows/ci.yml` lines 76-102 actually defines                                                                                                                                                                                                                                              |
-| `docs/05-engineering/32-environment-and-configuration.md` 141   | Supabase Vault holds "`CRON_SECRET`"                                                    | It holds two secrets. `dayflow_app_url` is missing from that table, and it is the one that silently stops reminders                                                                                                                                                                                                              |
-| `README.md` 36-37                                               | 107 tests across 6 files; largest route 221 kB                                          | **Resolved 5 Aug 2026 by running the suite.** Both figures were stale, and so were the 142/8 and 317/14 counts that replaced them in turn. The measured state is **318 tests across 14 files**, and the largest route is `/dashboard` at 204 kB. `README.md` and `HANDOFF.md` now both say so                                    |
-| `README.md` 324                                                 | Links to `middleware.ts` at the repository root                                         | The file is `src/middleware.ts`. The root copy was removed because Next.js only loads middleware beside `app/` (`HANDOFF.md` 216-228). The link is dead                                                                                                                                                                          |
-| `README.md` 387                                                 | Realtime is disabled under **Project Settings → API**                                   | Unverified and probably stale. Publication membership is what `0012` manages; the dashboard control for it is generally under **Database**. Step 37 says to check both                                                                                                                                                           |
+| Source                                                          | What it says                                                                            | What is actually true                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 100-101 | `0011` reads Vault "at apply time", so the secrets must exist before the migrations run | `0011` only defines `invoke_cron_endpoint`, which reads Vault when **called** (lines 38-42). The file's own header says "read at run time" (lines 10-11). The stated ordering is unnecessary                                                                                                                                                                                                                                                                                                  |
+| `GO-LIVE.md` 235-237                                            | Section 4.1 of the runbook calls the secrets `app_url` and `cron_secret`                | **Applied 5 Aug 2026.** The runbook was corrected to `dayflow_app_url` / `dayflow_cron_secret` in its version 0.1.1, and `GO-LIVE.md` section 5 already recorded that as closed - so section 1.6 was contradicting its own section 5. It now states the names plainly                                                                                                                                                                                                                         |
+| `HANDOFF.md` 255                                                | `/api/reports/generate` depends on `0014`                                               | **Applied 5 Aug 2026.** It does not. That route omits the user id, taking the `get_period_facts` branch from `0010` (`src/lib/ai/report.ts` 56-63). `/api/cron/daily-report` passes a user id and is what needs `get_period_facts_for_user` from `0014`                                                                                                                                                                                                                                       |
+| `README.md` 218-225, 229-244                                    | Run `0001` through `0013`, "thirteen files"; the table stops at `0014`                  | There are fifteen migrations, `0001` through `0015`                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `README.md` 400-407, runbook 126                                | "Push this repository to GitHub", "import the repository"                               | **Satisfied 5 Aug 2026 - nothing here is outstanding.** Git for Windows is installed at `%LOCALAPPDATA%\Programs\Git` and on the user PATH, `main` holds three commits (`f54864f`, `1b0ef44`, `eff2173`) and tracks `origin/main` at `eff2173` with nothing ahead, the remote is the private repository, and the GitHub credential is cached so a push needs no operator. The instruction is now a historical note, not a task. Step 7 covers what is left, which is reading the first CI run |
+| `scripts/build-all-migrations.mjs` 11                           | `npm run db:bundle:check` "is what CI runs"                                             | **Corrected in the script, still true of CI.** The header comment now says nothing runs it, and `HANDOFF.md` no longer repeats the claim. `.github/workflows/ci.yml` still has no such step, so the check happens only when somebody remembers                                                                                                                                                                                                                                                |
+| `GO-LIVE.md` 429-436, 502-503, 621-622                          | `curl -i -X POST ...`, `date +%Y-%m-%d`, `grep`                                         | **Applied 5 Aug 2026.** Bash. In PowerShell 5.1 `curl` is an alias for `Invoke-WebRequest` and rejects those flags. Each snippet in `GO-LIVE.md` now carries a note pointing at the PowerShell equivalent here, in steps 32, 43 and 27 respectively                                                                                                                                                                                                                                           |
+| `GO-LIVE.md` 139, 159-160                                       | The redirect target comes from `auth-form.tsx` and `reset-password-form.tsx`            | **Applied 5 Aug 2026.** Both redirect strings are in `src/features/auth/auth-operations.ts` lines 33 and 45. Those form files exist but the calls were moved out of them so the Supabase client could load lazily                                                                                                                                                                                                                                                                             |
+| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 121-122 | Configure redirect URLs "including `/auth/callback`"                                    | Insufficient on its own. Without the `/auth/callback**` wildcard entry, password reset silently lands on the landing page. `GO-LIVE.md` 133-144 explains it; the runbook does not mention it                                                                                                                                                                                                                                                                                                  |
+| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 116-117 | `supabase db push` "includes `0012` and `0014`"                                         | Does not mention `0015`, which is also pending and which is what makes account deletion possible at all                                                                                                                                                                                                                                                                                                                                                                                       |
+| `docs/05-engineering/33-cicd-and-deployment-runbook.md` 43-53   | The CI job table                                                                        | Omits the `audit` job that `.github/workflows/ci.yml` lines 102-128 actually defines                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `docs/05-engineering/32-environment-and-configuration.md` 141   | Supabase Vault holds "`CRON_SECRET`"                                                    | It holds two secrets. `dayflow_app_url` is missing from that table, and it is the one that silently stops reminders                                                                                                                                                                                                                                                                                                                                                                           |
+| `README.md` 36-37                                               | 107 tests across 6 files; largest route 221 kB                                          | **Resolved 5 Aug 2026 by running the suite.** Both figures were stale, and so were the 142/8 and 317/14 counts that replaced them in turn. The measured state is **318 tests across 14 files**, and the largest route is `/dashboard` at 204 kB. `README.md` and `HANDOFF.md` now both say so                                                                                                                                                                                                 |
+| `README.md` 324                                                 | Links to `middleware.ts` at the repository root                                         | The file is `src/middleware.ts`. The root copy was removed because Next.js only loads middleware beside `app/` (`HANDOFF.md` 216-228). The link is dead                                                                                                                                                                                                                                                                                                                                       |
+| `README.md` 387                                                 | Realtime is disabled under **Project Settings → API**                                   | Unverified and probably stale. Publication membership is what `0012` manages; the dashboard control for it is generally under **Database**. Step 37 says to check both                                                                                                                                                                                                                                                                                                                        |
 
 Two further gaps that are not errors but that a human following the existing documents would fall
 into:
@@ -1925,13 +1992,24 @@ The step 6 secret generator and its `(Get-Clipboard -Raw).Length` check **were**
 5 Aug 2026, on a throwaway value that was never used and was cleared from the clipboard
 afterwards. They behave as described: nothing is printed, and the length check reports 64.
 
-**The step 7 push has not been run.** The state it describes was verified by reading it back out
-of the repository - the two commits and their placeholder author, the remote, the local TLS
-settings, `.gitattributes`, that `.env.local` is ignored, and that `git ls-remote` succeeds against
-a public repository over HTTPS. What has not happened is `git push` itself, so the authentication
-behaviour, the personal access token fallback and the SAML single sign-on case are general
-knowledge about Git Credential Manager, not observations. Nor has the CI workflow ever run; the job
-names come from `.github/workflows/ci.yml`, but no run of it exists to look at.
+**The push has run. The CI result has not arrived.** Everything step 7 states about the
+repository was verified on 5 August 2026 by running the commands, not inferred: three commits on
+`main`, `main` tracking `origin/main` at `eff2173` with nothing ahead and nothing behind, the
+placeholder author on all three, the private remote, `credential.helper=manager`, the local TLS
+settings with `http.sslVerify` untouched, `.gitattributes`, and that `.env.local` is not tracked.
+The cached credential was proved by an unattended `git ls-remote` against the **private**
+repository, which returned its refs with no prompt - so the earlier hedging about the personal
+access token fallback and the SAML single sign-on case now applies only to a future prompt, if the
+cached token ever expires or is revoked.
+
+**What is still genuinely unknown is CI.** GitHub Actions is running for the first time in this
+project's history and **no run has ever completed**, so nothing in this document is a claim about
+whether it passes. The four job names, their steps and the line numbers cited for them come from
+reading `.github/workflows/ci.yml`; that file is the whole of the evidence. The `migrations` job
+is the least exercised of the four - it applies every migration against a throwaway Postgres and
+then re-applies them to prove idempotency, and nothing anywhere has ever done that, locally or in
+CI. Read step 14's remark about proven idempotency in that light: the job is written to
+demonstrate it and has not yet demonstrated anything.
 
 `next build`, `prettier --check` over the whole repository, and the Vitest suite were all run on
 5 Aug 2026 and all pass; that gap is closed.
@@ -1951,8 +2029,9 @@ browser download, the streaming response, or the cascade. Step 42 says this itse
 
 ## Change History
 
-| Version | Date       | Author | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ------- | ---------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0.1.0   | 2026-08-04 | Agent  | Initial draft. 48 ordered steps derived from `GO-LIVE.md`, document 33, `HANDOFF.md` and the code.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 0.2.0   | 2026-08-05 | Agent  | Replaced the step 42 placeholder with a verification procedure for the data export and account deletion, which now exist; the step count is unchanged and no step was renumbered. Recorded in section 4 which of the listed documentation errors have since been corrected, and settled the test count by running the suite: 318 across 14 files. Section 6 updated - the build, format and test gaps are closed; the export and deletion procedure is written from the code and has never been executed.                                                                                                                                                                                                                                                                                                                         |
-| 0.3.0   | 2026-08-05 | Agent  | Rewrote step 6 after it caused a live `CRON_SECRET` to be echoed into a terminal, PSReadLine history and a chat transcript: it now generates a fresh URL-safe value straight to the clipboard, is never rendered, is length-checked without display, and carries a warning covering the PSReadLine history file and how to clean it. Rewrote step 7 for the resolved Git situation - portable MinGit, two commits on `main`, `origin` configured, the schannel revocation failure fixed with the OpenSSL backend and an exported CA bundle, `.gitattributes` added - leaving only the author amend and the push, with the first CI run as the confirmation. The Route A / Route B choice is gone; steps 20, 26 and 46 and the section 4 register were corrected to match. No step was renumbered and the step count is unchanged. |
+| Version | Date       | Author | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------- | ---------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0.1.0   | 2026-08-04 | Agent  | Initial draft. 48 ordered steps derived from `GO-LIVE.md`, document 33, `HANDOFF.md` and the code.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 0.2.0   | 2026-08-05 | Agent  | Replaced the step 42 placeholder with a verification procedure for the data export and account deletion, which now exist; the step count is unchanged and no step was renumbered. Recorded in section 4 which of the listed documentation errors have since been corrected, and settled the test count by running the suite: 318 across 14 files. Section 6 updated - the build, format and test gaps are closed; the export and deletion procedure is written from the code and has never been executed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 0.3.0   | 2026-08-05 | Agent  | Rewrote step 6 after it caused a live `CRON_SECRET` to be echoed into a terminal, PSReadLine history and a chat transcript: it now generates a fresh URL-safe value straight to the clipboard, is never rendered, is length-checked without display, and carries a warning covering the PSReadLine history file and how to clean it. Rewrote step 7 for the resolved Git situation - portable MinGit, two commits on `main`, `origin` configured, the schannel revocation failure fixed with the OpenSSL backend and an exported CA bundle, `.gitattributes` added - leaving only the author amend and the push, with the first CI run as the confirmation. The Route A / Route B choice is gone; steps 20, 26 and 46 and the section 4 register were corrected to match. No step was renumbered and the step count is unchanged.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| 0.4.0   | 2026-08-05 | Agent  | Corrected the ownership model, which was this document's most harmful error: section 3 claimed nothing in the list could be delegated, because every remaining task was a dashboard action or a decision. That is false. Section 3 now states the real division, names the test that decides it, and points at `WHO-DOES-WHAT.md` as the authority on the split. Assigned all 48 `**Who:**` lines individually - 40 operator, 1 assistant, 7 split between the two - where all 48 previously read `operator`. Rewrote step 7 for the resolved Git situation: real Git for Windows on the user PATH so no per-session prefix is needed, three commits, `main` tracking `origin/main` at `eff2173` with nothing pending, the GitHub credential cached so the assistant can commit and push unattended, the placeholder commit author recorded as a settled decision rather than an open action, and reading the first CI run as the only work left. Corrected the `audit` job citation in step 46 from lines 89-102 to 102-128, the same job in the section 4 register from 76-102 to 102-128, and step 14's `migrations` job citations from 208-218 and 199-204 to 187-244, 228-230 and 240-242. Updated the section 4 register row for `README.md` 400-407 and the section 6 claim that the push had never run, preserving the items that remain genuinely unverified - no CI run has ever completed, and the Supabase and Vercel navigation paths are still general knowledge rather than verified fact. Strengthened rather than relaxed the secret-handling ownership in steps 6, 11, 24 and 31, and added the same caution to the VAPID generator in step 5. No step was renumbered and the step count is unchanged at 48. |
