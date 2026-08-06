@@ -58,6 +58,13 @@ export async function POST(request: Request) {
     );
   }
 
+  // Which half failed matters more than that something did: building the report
+  // reads the user's own aggregates, saving it writes a row, and the two fail
+  // for entirely unrelated reasons. Without this, the row level security refusal
+  // that broke every generation on the live deployment was indistinguishable in
+  // the logs from a provider outage. Named to match the cron handler's stages.
+  let stage: "build-report" | "save-report" = "build-report";
+
   try {
     const report = await buildReport(
       supabase,
@@ -66,6 +73,7 @@ export async function POST(request: Request) {
       settings?.ai_consent ?? false,
     );
 
+    stage = "save-report";
     await saveReport(supabase, user.id, periodType as PeriodType, periodStart, report);
 
     return NextResponse.json({
@@ -81,6 +89,7 @@ export async function POST(request: Request) {
     logger.error("Report generation failed", {
       event: "report.error",
       route: "/api/reports/generate",
+      stage,
       userId: user.id,
       periodType,
       periodStart,
