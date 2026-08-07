@@ -1,7 +1,8 @@
 # DayFlow AI — continuation brief
 
 Written 4 Aug 2026, revised the same day, again on 5 Aug 2026 after a full verification run,
-and again on 6 Aug 2026 after the app was deployed and its first real users found things.
+again on 6 Aug 2026 after the app was deployed and its first real users found things, and
+again on 7 Aug 2026 after the WIP branch was verified and the verification gaps closed.
 Point a new chat at this file to resume without re-deriving context.
 
 Read `README.md` for setup and `docs/README.md` for the specification map. This file
@@ -9,39 +10,39 @@ covers only what a fresh session cannot infer from the repository itself.
 
 ---
 
-## 0. Read this first — the tree is not in a clean state
+## 0. Read this first — the WIP branch is verified, not yet merged
 
 The app is **deployed and live on Vercel**, tracking `main`. Treat `main` as production.
 
-There is an unmerged branch, `wip/session-handoff-2026-08-06`, commit `5bd4174`. It holds
-work from five subagents that were **interrupted mid-task by a workspace disconnect**, so it
-is a snapshot of what survived on disk rather than a reviewed change. **None of it has been
-typechecked, linted, tested or built as a set.** It was deliberately kept off `main` so that
-unverified work could not reach the live site.
+Branch `wip/session-handoff-2026-08-06` holds the post-deployment fixes from section 7, plus
+the verification cleanup from 7 Aug 2026. It has been typechecked, linted, tested, built and
+budget-checked as a set. **It has not been merged to `main`.** Merging deploys.
 
-Resuming means, in this order:
+What a resume session should do next, in order:
 
-1. Check out that branch and run the full suite from section 1. Expect failures; they have
-   never been run against these files together.
-2. Read each change against the intent recorded in section 7 below, because the workers that
-   wrote them are gone and cannot be asked.
-3. Only then merge to `main`, which deploys.
+1. Confirm the suite in section 1 still passes on the branch tip.
+2. Apply migrations `0014`–`0017` to the live database (operator, SQL editor) — the streak
+   and insights fixes are inert until `0016` and `0017` are applied; account deletion needs
+   `0015`; daily-report cron needs `0014`.
+3. Merge to `main` only when ready to deploy.
+4. On-device check of the mobile tab bar (section 7.5) — the component is present in code;
+   the original report was never reproduced after the disconnect.
 
-What is on the branch, by area — every item unverified:
+What landed on the branch, by area — all verified locally on 7 Aug 2026:
 
-| Files                                                                        | Intent                                                           |
-| ---------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `src/lib/domain/goal-rules.ts`, its test, `supabase/migrations/0016`         | The false 731-day streak — see section 7.1                       |
-| `src/features/settings/save-settings.ts`, `use-settings.ts`, `api/settings/` | "That setting could not be saved" — see section 7.2              |
-| `src/features/analytics/analytics-charts.tsx`, `chart-geometry.ts`, tests    | Vertical responsive bars showing hours — see section 7.3         |
-| `src/app/api/reports/generate/route.ts`, `src/lib/ai/provider.ts`, `0017`    | Insights failing to generate — see section 7.4                   |
-| `.github/workflows/ci.yml`, `package.json`, `package-lock.json`              | The failing dependency audit and the deprecated Node 20 actions  |
-| `e2e/public-routes.spec.ts`                                                  | The four deterministically failing Playwright tests              |
-| `docs/NATIVE-APP-PLAN.md`                                                    | Android and iOS packaging assessment; one of its claims is wrong |
+| Files                                                                     | Intent                                                              | Status                                                    |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------- |
+| `src/lib/domain/goal-rules.ts`, its test, `supabase/migrations/0016`      | The false 731-day streak — see section 7.1                          | Code+tests green; needs live `0016`                       |
+| `src/features/settings/save-settings.ts`, `use-update-settings.ts`, API   | "That setting could not be saved" — see section 7.2                 | Verified; write path deferred from First Load             |
+| `src/features/analytics/analytics-charts.tsx`, `chart-geometry.ts`, tests | Vertical responsive bars showing hours — see section 7.3            | Verified                                                  |
+| `src/app/api/reports/generate/route.ts`, `src/lib/ai/provider.ts`, `0017` | Insights failing to generate — see section 7.4                      | Code green; needs live `0017`                             |
+| `.github/workflows/ci.yml`, `package.json`, `package-lock.json`           | Dependency audit and Node 24 actions                                | `npm audit --audit-level=high` clean; `@v7` pins are real |
+| `e2e/public-routes.spec.ts`                                               | Four failing Playwright tests                                       | Tests corrected; form is non-enumerating                  |
+| `docs/NATIVE-APP-PLAN.md`                                                 | Android/iOS plan; icon claim corrected; `.well-known` matcher fixed | Verified against repo                                     |
 
-Three stray build logs sit untracked in the working tree — `baseline-build-mine.txt`,
-`my-baseline-build.txt`, `settings-fix-build.txt`. They are captured `next build` output from
-comparison runs. Delete them; nothing reads them.
+A corrupted empty `.git/rebase-merge` (OneDrive reparse point) was removed on 7 Aug with
+`attrib` + delete; the branch tip was already complete. Stray build logs named in the
+previous revision were deleted.
 
 ---
 
@@ -49,16 +50,22 @@ comparison runs. Delete them; nothing reads them.
 
 Every screen on the roadmap exists. No placeholder pages remain.
 
-The suite below was run on 5 Aug 2026 against `main`, and passes there. **It has not been
-run against the WIP branch.**
+The suite below was run on 7 Aug 2026 against `wip/session-handoff-2026-08-06`:
 
-| Check                    | Result                                         |
-| ------------------------ | ---------------------------------------------- |
-| `npx tsc --noEmit`       | Clean                                          |
-| `npx eslint .`           | 0 errors, 3 pre-existing `no-console` warnings |
-| `npx vitest run`         | 332 tests across 14 files, all passing         |
-| `npx next build`         | Succeeds, 24 routes                            |
-| `npx prettier --check .` | Clean                                          |
+| Check                          | Result                                                       |
+| ------------------------------ | ------------------------------------------------------------ |
+| `npx tsc --noEmit`             | Clean                                                        |
+| `npx eslint .`                 | 0 errors, 3 pre-existing `no-console` warnings in `scripts/` |
+| `npx vitest run`               | 399 tests across 16 files, all passing                       |
+| `npx next build`               | Succeeds                                                     |
+| `npx prettier --check .`       | Clean                                                        |
+| `npm run db:bundle:check`      | Clean (regenerated for `0016`/`0017`)                        |
+| `npm audit --audit-level=high` | 0 vulnerabilities                                            |
+| `npm run budget`               | Passes; three ADR-015 allowances still listed                |
+
+`/insights` and `/settings` both measure 200 kB First Load after splitting the settings
+read hooks from the write path and deferring export/delete cards. Do not recombine
+`use-settings.ts` and `use-update-settings.ts`.
 
 The three lint warnings are `console.log` calls in `scripts/`, where the rule allows only
 `warn` and `error`. They are build tooling writing to a terminal on purpose.
@@ -66,7 +73,7 @@ The three lint warnings are `console.log` calls in `scripts/`, where the rule al
 | Area                                                                   | State                                                                                                          |
 | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | Specification suite (37 documents)                                     | Complete                                                                                                       |
-| Database — 15 migrations                                               | `0001`–`0013` applied to the live project; **`0014` and `0015` both need applying**                            |
+| Database — 17 migrations                                               | `0001`–`0013` applied to the live project; **`0014`–`0017` all need applying**                                 |
 | Foundation — clients, types, auth, query, realtime, Zod                | Complete                                                                                                       |
 | App shell, UI kit, theming, navigation                                 | Complete                                                                                                       |
 | Auth — sign up, sign in, confirmation, password reset, error surfacing | Complete; the consolidation described in the old brief is fully applied                                        |
@@ -194,7 +201,8 @@ it has drifted.
 after it was written, to correct a `security definer` function that set
 `search_path = public` instead of empty, which breached DF-SEC-004 and check 6 of section 9
 of `docs/04-architecture/25-database-schema-and-rls.md`. That was legitimate only because it
-had not been applied. **Once you apply them, both become immutable like the rest.**
+had not been applied. `0016` and `0017` are likewise unapplied and editable. **Once you apply
+any of them, that file becomes immutable like the rest.**
 
 ### Configuration status
 
@@ -204,7 +212,7 @@ had not been applied. **Once you apply them, both become immutable like the rest
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY`                        | Set — note this is the newer `sb_publishable_...` format, not a legacy `anon` JWT                                                     |
 | `SUPABASE_SERVICE_ROLE_KEY`                            | Set — newer `sb_secret_...` format. **Was pasted into a chat transcript, so roll it in Project Settings → API before any deployment** |
 | `CRON_SECRET`, VAPID keys                              | Generated locally, and the VAPID public key is a real 87-character key                                                                |
-| Migrations `0014` and `0015`                           | **Not applied.** Apply them in order, on their own, in the SQL editor                                                                 |
+| Migrations `0014`–`0017`                               | **Not applied.** Apply them in order, on their own, in the SQL editor                                                                 |
 | Auth → URL Configuration                               | Done, including the `**` wildcard redirect                                                                                            |
 | Auth → Providers → Email → Confirm email               | Off, which is correct for development. **Must be on before deploying**                                                                |
 | Vault secrets `dayflow_app_url`, `dayflow_cron_secret` | Not created. Reminders will not fire until they are — see README step 7                                                               |
@@ -321,17 +329,18 @@ violated by accident:
    now. If the middleware is ever moved back, reinstate a check that distinguishes "no
    session" from "could not ask", so a dropped request does not declare a valid link dead.
 
-1. **Apply migrations `0014` and `0015`** to the live database, in order, in the SQL editor.
-   This cannot be done from this repository. `/api/cron/daily-report` depends on `0014`:
-   `buildReport` is given a user id there, which takes the `get_period_facts_for_user` branch
-   in `src/lib/ai/report.ts` lines 56-63, and that function is what `0014` adds.
-   `/api/reports/generate` does **not** — it omits the user id, so it takes the
-   `get_period_facts` branch from `0010` and works on the schema as it stands today. An
-   earlier version of this line said the reverse. `0015` is what makes account deletion
-   possible at all — see the note below, because it fixes something broken rather than only
-   adding a feature. Until `0015` is applied, the new delete-account dialog reports the
-   feature as unavailable and deletes nothing, which is the `PGRST202` branch in
-   `src/features/settings/delete-account.ts`.
+1. **Apply migrations `0014`, `0015`, `0016` and `0017`** to the live database, in order, in
+   the SQL editor. This cannot be done from this repository. `/api/cron/daily-report` depends
+   on `0014`: `buildReport` is given a user id there, which takes the
+   `get_period_facts_for_user` branch in `src/lib/ai/report.ts` lines 56-63, and that function
+   is what `0014` adds. `/api/reports/generate` does **not** — it omits the user id, so it
+   takes the `get_period_facts` branch from `0010` — but it needs `0017` for the `ai_reports`
+   insert/update RLS policies, which is why generation failed on the live site. `0015` is what
+   makes account deletion possible at all — see the note below. `0016` is the streak semantics
+   fix from section 7.1. Until `0015` is applied, the delete-account dialog reports the feature
+   as unavailable and deletes nothing, which is the `PGRST202` branch in
+   `src/features/settings/delete-account.ts`. Until `0016`/`0017` are applied, streaks and
+   insights keep their production defects even though the code on the branch is correct.
 2. **Create the Vault secrets** `dayflow_app_url` and `dayflow_cron_secret`, per
    `GO-LIVE.md` 1.6. Until they exist the scheduled jobs run and do nothing.
 3. **Verify the data export and the account deletion interface** against a throwaway account
@@ -575,36 +584,36 @@ still unapplied.
 
 ### 7.5 The mobile navigation bar is missing — and may still be
 
-Reported by the operator on a phone. **This one has no fix on the branch.** The worker carrying
-it was the one killed by the disconnect, and nothing in the committed diff obviously addresses
-navigation. Verify on a real device before assuming it was handled.
+Reported by the operator on a phone. **No dedicated fix was needed on the branch:**
+`src/components/layout/app-shell.tsx` already renders a fixed bottom tab bar with
+`md:hidden` and safe-area padding, mounted from the authenticated layout. If it is still
+absent on a real device after deploy, the defect is runtime (viewport, overlay, or install
+mode), not a missing component. Verify on a phone before rebuilding navigation.
 
 ---
 
-## 8. CI has now run, and it fails
+## 8. CI has now run; the WIP branch should clear both red jobs
 
 Earlier revisions of this file, and section 3 of the deployment runbook, said the workflows had
 never executed. That is no longer true — the first run was triggered by the push on 6 Aug 2026.
-Two jobs are red, deterministically, and fixes for both are on the WIP branch.
+Two jobs were red on `main`. Fixes for both are on the WIP branch and have been verified
+locally (`npm audit --audit-level=high` is clean; the public e2e expectations match the page).
 
-**`Dependency audit`** exits 1. It reports high and critical advisories only, so this is not
-noise.
+**`Dependency audit`** was exiting 1 on high/critical advisories. The lockfile overrides for
+`postcss` and `sharp` clear them.
 
-**`End-to-end (public routes)`** fails 4 of 38, the same two tests on both the desktop and
-mobile projects, through all retries:
+**`End-to-end (public routes)`** failed 4 of 38 for two reasons, both corrected on the test
+side after reading the product:
 
-- `e2e/public-routes.spec.ts:15` finds no link named `sign up` or `get started` on the landing
-  page. Either the landing page has no such call to action, or it is not a link, or it is
-  labelled differently. Decide which side is wrong before editing the test.
-- `e2e/public-routes.spec.ts:46` finds no "check your email" confirmation after a password
-  reset request. **Treat this as a possible security defect first, not a broken test.** The
-  test exists to prove the form gives an identical response whether or not the account exists;
-  if the form instead reveals which, it is an account-enumeration tool and the test is doing
-  exactly its job.
+- Landing CTA: the page says "Start tracking" linking to `/sign-up`; the test now accepts that
+  label.
+- Password reset: the form always shows the same "If an account exists…" confirmation and does
+  not enumerate accounts. The rewritten test mocks recover and asserts identical copy. Treat
+  a future failure of this assertion as a possible security regression first.
 
-Also: `actions/checkout@v4`, `actions/setup-node@v4` and `actions/upload-artifact@v4` all
-target the deprecated Node 20 and are being forced onto Node 24. And the three long-standing
-`no-console` warnings in `scripts/` now show up as CI annotations, which is cosmetic.
+Actions pins are `checkout@v7`, `setup-node@v7` and `upload-artifact@v7` — all real releases
+on Node 24 as of mid-2026. An earlier review that claimed `@v7` did not exist for checkout
+and upload-artifact was wrong.
 
 ---
 
@@ -646,12 +655,12 @@ verify before building on any of them:
   Asset Links needs an unredirected 200, so an Android Trusted Web Activity would fail
   verification and show a browser bar. Unconfirmed, but cheap to check and cheap to fix.
 
-**One claim in `docs/NATIVE-APP-PLAN.md` is wrong.** It states there are no icon PNGs in the
-repository and concludes that the live site cannot be serving them. All three are committed and
-unignored — `git ls-files public` lists `icon-192.png`, `icon-512.png` and
-`icon-maskable-512.png`. The conclusions that document draws from the missing-icon premise
-(no home-screen icon, no splash screen, default push icon) should be disregarded. The rest of
-it, including the Google Play twelve-tester closed-test constraint, was not contradicted.
+**One claim in `docs/NATIVE-APP-PLAN.md` was wrong and is now corrected in that file.** It
+stated there were no icon PNGs in the repository. All three are committed and unignored —
+`git ls-files public` lists `icon-192.png`, `icon-512.png` and `icon-maskable-512.png`. The
+middleware matcher now also excludes `.well-known/`, so Digital Asset Links will not be
+redirected to sign-in once `public/.well-known/assetlinks.json` exists. The file itself is
+still absent until a signing fingerprint is known.
 
 Two verdicts from `docs/PRODUCT-IDEAS.md` worth not relitigating: a **chat bot is not
 recommended**, because the first two things users would ask it — log this for me, add up my

@@ -228,7 +228,10 @@ describe("calculateStreak", () => {
       // avoiding. That is the streak DF-GOA-032 exists to award.
       const kept = run("2026-08-06", 9, { achievedMinutes: 0, momentCount: 7 });
 
-      expect(calculateStreak(kept, target, "at_most")).toEqual({ current: 9, longest: 9 });
+      expect(calculateStreak(kept, target, "at_most")).toEqual({
+        current: 9,
+        longest: 9,
+      });
     });
 
     it("counts a run of met days for an at_least goal", () => {
@@ -254,7 +257,9 @@ describe("calculateStreak", () => {
  */
 describe("the SQL the Goals screen actually uses", () => {
   const sql = readFileSync(
-    fileURLToPath(new URL("../../../supabase/migrations/0016_streak_semantics.sql", import.meta.url)),
+    fileURLToPath(
+      new URL("../../../supabase/migrations/0016_streak_semantics.sql", import.meta.url),
+    ),
     "utf8",
   );
 
