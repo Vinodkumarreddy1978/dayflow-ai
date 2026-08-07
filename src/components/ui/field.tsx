@@ -129,6 +129,9 @@ export function Switch({ checked, onChange, label, description, disabled }: Swit
         disabled={disabled}
         onClick={() => onChange(!checked)}
         className={cn(
+          // w-11 / size-5 / inset 0.5 leaves exactly translate-x-5 of travel.
+          // translate-x-5.5 is not on Tailwind's spacing scale, so the ON
+          // transform never applied and the thumb sat in the wrong place.
           "relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors",
           "disabled:cursor-not-allowed disabled:opacity-50",
           checked ? "bg-accent" : "bg-border-strong",
@@ -137,8 +140,8 @@ export function Switch({ checked, onChange, label, description, disabled }: Swit
         <span
           aria-hidden="true"
           className={cn(
-            "absolute top-0.5 size-5 rounded-full bg-white shadow-sm transition-transform",
-            checked ? "translate-x-5.5" : "translate-x-0.5",
+            "pointer-events-none absolute top-0.5 left-0.5 size-5 rounded-full bg-white shadow-sm transition-transform",
+            checked ? "translate-x-5" : "translate-x-0",
           )}
         />
       </button>
