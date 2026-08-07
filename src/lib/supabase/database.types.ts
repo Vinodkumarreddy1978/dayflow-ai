@@ -60,6 +60,8 @@ export type SettingsRow = {
   overlap_warn_enabled: boolean;
   gap_warn_hours: number;
   timezone: string;
+  /** `auto` or `user`. See migration 0018 and `shouldAdoptBrowserTimeZone`. */
+  timezone_source: string;
   week_starts_on: number;
   time_format: string;
   date_format: string;

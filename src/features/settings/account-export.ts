@@ -80,6 +80,7 @@ const SETTINGS_COLUMNS = [
   "overlap_warn_enabled",
   "gap_warn_hours",
   "timezone",
+  "timezone_source",
   "week_starts_on",
   "time_format",
   "date_format",

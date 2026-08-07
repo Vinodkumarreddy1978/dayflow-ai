@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { MAX_QUEUE_LIMIT, MIN_QUEUE_LIMIT } from "@/lib/domain/queue-rules";
 import { MIN_REMINDER_INTERVAL_MINUTES } from "@/lib/domain/reminder-rules";
+import { TIME_ZONE_SOURCES } from "@/lib/domain/timezone";
 
 /**
  * Shared validation schemas.
@@ -122,6 +123,10 @@ export const settingsSchema = z
     overlap_warn_enabled: z.boolean(),
     gap_warn_hours: z.number().int().min(1).max(12),
     timezone: z.string().min(1),
+    // Whether the zone above was chosen or detected. The settings screen writes
+    // `user` with every deliberate change, which is what stops the app frame's
+    // detection from overwriting it. Migration 0018.
+    timezone_source: z.enum(TIME_ZONE_SOURCES),
     week_starts_on: z.number().int().min(0).max(6),
     time_format: z.enum(["12h", "24h"]),
     date_format: z.enum(["iso", "dmy", "mdy"]),

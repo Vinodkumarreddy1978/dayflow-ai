@@ -1,12 +1,18 @@
 "use client";
 
+import { useRef } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase/client";
 import { queryKeys } from "@/lib/query/keys";
 import { useToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/session-context";
-import type { Settings } from "@/lib/supabase/database.types";
+import type { ParentCategory, Settings } from "@/lib/supabase/database.types";
 import type { SettingsInput } from "@/lib/schemas";
+
+/** As much of the cached category tree as the locked-weight check reads. */
+interface CachedCategoryTree {
+  parents: ParentCategory[];
+}
 
 /**
  * The write helpers load on the first save rather than with the page. The
@@ -19,9 +25,26 @@ export function useUpdateSettings() {
   const toast = useToast();
   const { userId } = useSession();
 
+  // The row as it stood before the optimistic update. `onMutate` runs first and
+  // patches the cache, so by the time the write happens the cache can no longer
+  // say what is being changed - and the locked-weight check needs to know.
+  const beforeMutation = useRef<Settings | null>(null);
+
   return useMutation({
     mutationFn: async (patch: SettingsInput) => {
-      const { saveSettings } = await import("./save-settings");
+      const { assertNoLockedWeightChange, saveSettings } =
+        await import("./save-settings");
+
+      const tree = queryClient.getQueryData<CachedCategoryTree>(
+        queryKeys.categories.tree(),
+      );
+
+      assertNoLockedWeightChange(
+        patch,
+        beforeMutation.current,
+        tree?.parents.find((parent) => parent.is_system)?.id ?? null,
+      );
+
       return saveSettings(
         (values) => createClient().from("settings").update(values),
         userId,
@@ -34,6 +57,7 @@ export function useUpdateSettings() {
     onMutate: async (patch) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.settings });
       const previous = queryClient.getQueryData<Settings>(queryKeys.settings);
+      beforeMutation.current = previous ?? null;
 
       if (previous) {
         queryClient.setQueryData<Settings>(queryKeys.settings, {

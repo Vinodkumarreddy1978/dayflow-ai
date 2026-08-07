@@ -387,6 +387,9 @@ being written into the migration, so that the migration file is safe to commit.
 | `0013_seed_new_user_timezone.sql`   | Records the sign-up timezone on the seeded settings row                  |
 | `0014_scheduled_report_support.sql` | Service-role-only period facts for a named user, and a local-date helper |
 | `0015_account_deletion.sql`         | `delete_account`, and the system category guard narrowed to permit it    |
+| `0016_streak_semantics.sql`         | `get_streak` counting only days that were actually recorded              |
+| `0017_ai_write_policies.sql`        | Insert and update policies for `ai_reports` and `ai_usage`               |
+| `0018_timezone_source.sql`          | `settings.timezone_source`, so detection cannot overwrite a chosen zone  |
 
 Forward-only, applied in order, never edited after reaching production, per section 4 of
 [05 - Versioning and Release Policy](../00-governance/05-versioning-and-release-policy.md).

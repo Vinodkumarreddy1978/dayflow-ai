@@ -143,7 +143,57 @@ export async function saveSettings(
   return data;
 }
 
+/**
+ * A change the application refuses before it reaches the database, as opposed
+ * to one the database itself rejected. Its message is written for the user, so
+ * it is shown as it stands.
+ */
+export class LockedSettingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LockedSettingError";
+  }
+}
+
+/**
+ * The productivity weight of the system "Distracted Time" group is not the
+ * user's to set.
+ *
+ * That group is reserved: it is seeded on every account with `is_system`, it
+ * owns a colour no other group may use (DF-DS-104), and the distraction share
+ * is computed from it. A positive weight would have the same minutes counting as
+ * distraction in one figure and as productive time in another, and the score
+ * would be quietly incoherent rather than visibly wrong.
+ *
+ * Enforced on the write path and not only on the control, so that a patch
+ * assembled anywhere else is refused too. It cannot be enforced in
+ * `settingsSchema`, because the key is the account's own parent category id and
+ * a schema has no way to recognise one; and it cannot be enforced on a server,
+ * because settings go from the browser straight to PostgREST. The only stronger
+ * place is a database trigger, which is a migration.
+ */
+export function assertNoLockedWeightChange(
+  patch: SettingsInput,
+  previous: Pick<Settings, "productivity_weights"> | null,
+  lockedKey: string | null,
+): void {
+  const next = patch.productivity_weights;
+  // Nothing to compare against is not permission. It is also not a change: the
+  // control cannot have rendered without both the row and the category tree.
+  if (!next || !lockedKey || !previous) return;
+
+  const stored = (previous.productivity_weights ?? {}) as Record<string, number>;
+  // Inequality rather than a presence check, so that dropping the key from the
+  // object counts as changing it. A jsonb update replaces the whole value.
+  if (next[lockedKey] === stored[lockedKey]) return;
+
+  throw new LockedSettingError(
+    "The weight for Distracted Time is fixed, so that change was not saved.",
+  );
+}
+
 export function describeSettingsWriteError(error: unknown): string {
+  if (error instanceof LockedSettingError) return error.message;
   if (error instanceof SettingsWriteError) return error.message;
 
   return "That setting could not be saved, so it has been put back.";

@@ -31,8 +31,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         userId: user.id,
         email: user.email ?? "",
         displayName: profileResult.data?.display_name ?? null,
-        // Falls back to UTC only if seeding failed; the client corrects this
-        // from the browser's own timezone as soon as settings load.
+        // The stored zone, which is the one every Local Day is counted in.
+        // Falls back to UTC only if seeding failed; where the stored value was
+        // detected rather than chosen, the client corrects it from the browser
+        // as soon as settings load.
         timeZone: settingsResult.data?.timezone ?? "UTC",
       }}
     >
