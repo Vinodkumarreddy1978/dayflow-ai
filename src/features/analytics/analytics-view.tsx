@@ -198,7 +198,9 @@ export function AnalyticsView() {
 
         <div className="p-4 pt-0">
           {slices.isLoading ? (
-            <Skeleton className="h-64 w-full" />
+            // Matches the chart's own height, so the card does not resize when
+            // the figures arrive. DF-A11Y-062.
+            <Skeleton className="h-72 w-full" />
           ) : (slices.data ?? []).length === 0 ? (
             <EmptyState
               title="Nothing recorded in this range"

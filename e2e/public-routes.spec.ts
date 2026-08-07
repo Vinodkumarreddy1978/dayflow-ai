@@ -16,9 +16,17 @@ test.describe("public routes", () => {
     await page.goto("/");
 
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: /sign up|get started/i }).first(),
-    ).toBeVisible();
+
+    // Found by accessible name, so an icon-only or unlabelled call to action
+    // fails here rather than passing on its href. The destination is asserted
+    // separately because a labelled link that goes somewhere else is not a way
+    // in, and matching the name alone would not notice.
+    const signUp = page
+      .getByRole("link", { name: /start tracking|sign up|get started/i })
+      .first();
+
+    await expect(signUp).toBeVisible();
+    await expect(signUp).toHaveAttribute("href", "/sign-up");
   });
 
   test("sign in and sign up are reachable and labelled", async ({ page }) => {
@@ -44,15 +52,53 @@ test.describe("public routes", () => {
   });
 
   test("password reset does not reveal whether an account exists", async ({ page }) => {
-    await page.goto("/reset-password");
+    // Both answers Supabase can give to a recovery request are played back to
+    // the form, because the property under test is that it cannot tell them
+    // apart. 200 is what a project with email enumeration protection on returns
+    // for every address; the 400 is what one with it off returns for an address
+    // that has no account, and it is the one that would leak. DF-UX-191.
+    //
+    // Answering in the browser is also what makes this runnable with no
+    // Supabase project behind the deployment, per the note at the top of this
+    // file: the placeholder host in CI is not reachable, and a form reporting
+    // that it could not connect would prove nothing either way.
+    let recovery = { status: 200, body: "{}" };
 
-    await page.getByLabel(/email/i).fill("definitely-not-a-user@example.com");
-    await page.getByRole("button", { name: /send reset link/i }).click();
+    await page.route("**/auth/v1/recover*", (route) =>
+      route.fulfill({
+        status: recovery.status,
+        contentType: "application/json",
+        body: recovery.body,
+      }),
+    );
+
+    async function confirmationText() {
+      await page.goto("/reset-password");
+      // The same address both times: the confirmation quotes back what was
+      // typed, so a different one would differ for a reason that is not a leak.
+      await page.getByLabel(/email/i).fill("someone@example.com");
+      await page.getByRole("button", { name: /send reset link/i }).click();
+
+      // The confirmation, not merely some text: reaching this state at all is
+      // half the assertion, since an error would leave the form on screen.
+      const confirmation = page.getByRole("main").getByRole("status");
+      await expect(confirmation).toBeVisible();
+
+      return (await confirmation.innerText()).trim();
+    }
+
+    const whenTheAccountExists = await confirmationText();
+
+    recovery = {
+      status: 400,
+      body: JSON.stringify({ code: "user_not_found", message: "User not found" }),
+    };
+    const whenItDoesNot = await confirmationText();
 
     // The same confirmation regardless. Anything else turns this form into an
     // account-enumeration tool.
-    await expect(page.getByText(/check your email/i)).toBeVisible();
-    await expect(page.getByText(/if an account exists/i)).toBeVisible();
+    expect(whenItDoesNot).toBe(whenTheAccountExists);
+    expect(whenTheAccountExists).toMatch(/if an account exists/i);
   });
 });
 

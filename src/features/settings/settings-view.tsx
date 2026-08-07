@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import { BellOff, BellRing, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge, Card, CardHeader, Skeleton } from "@/components/ui/card";
@@ -8,13 +8,24 @@ import { Field, Input, Select, Switch } from "@/components/ui/field";
 import { useSession } from "@/lib/session-context";
 import { useCategories } from "@/features/categories/use-categories";
 import { usePush } from "@/features/notifications/use-push";
-import { useSettings, useUpdateSettings } from "./use-settings";
-import { DataExportCard } from "./data-export-card";
-import { DeleteAccountCard } from "./delete-account-card";
+import { useSettings } from "./use-settings";
+import { useUpdateSettings } from "./use-update-settings";
 import { MIN_REMINDER_INTERVAL_MINUTES } from "@/lib/domain/reminder-rules";
 import { formatDuration } from "@/lib/format";
 import type { SettingsInput } from "@/lib/schemas";
 import type { Settings } from "@/lib/supabase/database.types";
+
+// Below-the-fold privacy controls. Their dialogs were already deferred; the card
+// shells join them so the First Load chunk does not pay for icons and copy the
+// user has not scrolled to. The settings route has no headroom left.
+const DataExportCard = lazy(() =>
+  import("./data-export-card").then((module) => ({ default: module.DataExportCard })),
+);
+const DeleteAccountCard = lazy(() =>
+  import("./delete-account-card").then((module) => ({
+    default: module.DeleteAccountCard,
+  })),
+);
 
 const TIME_ZONES = (() => {
   // Full IANA list where the browser exposes it, falling back to a short list so
@@ -76,8 +87,10 @@ export function SettingsView() {
       <AiCard settings={settings} set={set} />
       <AppearanceCard settings={settings} set={set} />
       <AccountCard email={email} />
-      <DataExportCard />
-      <DeleteAccountCard />
+      <Suspense fallback={null}>
+        <DataExportCard />
+        <DeleteAccountCard />
+      </Suspense>
     </div>
   );
 }

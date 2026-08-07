@@ -2,6 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 import { serverEnv } from "@/lib/env";
+import { logger } from "@/lib/logger";
 import type { Insight, PeriodFacts } from "./facts";
 
 /**
@@ -160,17 +161,39 @@ async function callAnthropic(
 /**
  * Generates the narrative, or returns null.
  *
- * Null is a normal outcome - AI disabled, key missing, provider down, model
- * returning something that fails validation - and every caller handles it by
- * falling back to the deterministic report. There is no path where an AI failure
- * denies the user their own statistics.
+ * Null is a normal outcome - AI disabled, key missing, configuration missing
+ * altogether, provider down, model returning something that fails validation -
+ * and every caller handles it by falling back to the deterministic report.
+ * There is no path where an AI failure denies the user their own statistics.
  */
 export async function generateNarrative(
   facts: PeriodFacts,
   insights: Insight[],
   periodType: string,
 ): Promise<NarrativeResult | null> {
-  const env = serverEnv();
+  let env: ReturnType<typeof serverEnv>;
+
+  try {
+    env = serverEnv();
+  } catch (cause) {
+    // The one AI failure that used to escape this function, and the reason the
+    // guarantee above was not true.
+    //
+    // `serverEnv` validates lazily, so a deployment missing SUPABASE_SERVICE_
+    // ROLE_KEY or CRON_SECRET - or carrying AI_ENABLED=true with no key for the
+    // selected provider - builds and deploys cleanly and then throws here, at
+    // first use. Thrown, it propagated through buildReport to the route and
+    // became a 500, denying the user the deterministic report they were
+    // entitled to whether or not a model was ever going to be involved.
+    // DF-AIA-030.
+    logger.warn("AI narrative skipped: server configuration is unusable", {
+      event: "ai.config_unavailable",
+      periodType,
+      error: cause,
+    });
+    return null;
+  }
+
   if (!env.AI_ENABLED) return null;
 
   const apiKey =

@@ -3,7 +3,8 @@
 import { useEffect, type ReactNode } from "react";
 import { useSession } from "@/lib/session-context";
 import { useUiStore } from "@/lib/store/ui-store";
-import { useSettings, useUpdateSettings } from "@/features/settings/use-settings";
+import { useSettings } from "@/features/settings/use-settings";
+import { useUpdateSettings } from "@/features/settings/use-update-settings";
 import { MomentModal } from "@/features/moments/moment-modal";
 import { AppShell } from "./app-shell";
 
