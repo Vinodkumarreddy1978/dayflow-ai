@@ -8,6 +8,7 @@ import { Field, Input, Select, Switch } from "@/components/ui/field";
 import { useSession } from "@/lib/session-context";
 import { useCategories } from "@/features/categories/use-categories";
 import { usePush } from "@/features/notifications/use-push";
+import { useToast } from "@/components/ui/toast";
 import { useSettings } from "./use-settings";
 import { useUpdateSettings } from "./use-update-settings";
 import { MIN_REMINDER_INTERVAL_MINUTES } from "@/lib/domain/reminder-rules";
@@ -54,6 +55,7 @@ export function SettingsView() {
   const { email, timeZone } = useSession();
   const { data: settings, isLoading } = useSettings();
   const update = useUpdateSettings();
+  const toast = useToast();
 
   if (isLoading || !settings) {
     return (
@@ -65,8 +67,13 @@ export function SettingsView() {
     );
   }
 
+  // There is no Save button on purpose: each control writes immediately
+  // (DF-SET-003). The toast is the confirmation that used to be missing, so a
+  // change that looked like it did nothing is no longer silent on success.
   const set: Setter = (key, value) => {
-    update.mutate({ [key]: value } as SettingsInput);
+    update.mutate({ [key]: value } as SettingsInput, {
+      onSuccess: () => toast.success("Saved."),
+    });
   };
 
   return (

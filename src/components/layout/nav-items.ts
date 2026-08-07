@@ -35,10 +35,13 @@ export const navItems: NavItem[] = [
   { href: "/goals", label: "Goals", icon: Target },
   { href: "/categories", label: "Categories", icon: FolderTree },
   { href: "/search", label: "Search", icon: Search },
-  { href: "/settings", label: "Settings", icon: Settings, primary: true },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export const primaryNavItems = navItems.filter((item) => item.primary);
+
+/** Destinations that live behind the phone More sheet. DF-UX-001. */
+export const moreNavItems = navItems.filter((item) => !item.primary);
 
 /**
  * Whether a nav item is the current destination.
