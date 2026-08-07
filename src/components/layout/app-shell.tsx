@@ -1,11 +1,13 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Plus } from "lucide-react";
+import { Menu, Plus } from "lucide-react";
 import { useRealtimeSync } from "@/lib/query/use-realtime-sync";
 import { cn } from "@/lib/utils";
-import { isActiveRoute, navItems, primaryNavItems } from "./nav-items";
+import { Modal } from "@/components/ui/modal";
+import { isActiveRoute, moreNavItems, navItems, primaryNavItems } from "./nav-items";
 
 interface AppShellProps {
   userId: string;
@@ -21,6 +23,10 @@ interface AppShellProps {
  * Both are always visible rather than hidden behind a hamburger. A menu that
  * must be opened before it can be read costs a tap on every navigation, and the
  * screen space it saves is space this product does not need. DF-IA-023.
+ *
+ * The fifth phone tab is More, not Settings: Goals, Insights, Categories,
+ * Search and Settings live behind that sheet so the bar stays at five taps and
+ * every destination remains reachable below 768px. DF-UX-001.
  */
 export function AppShell({
   userId,
@@ -30,7 +36,10 @@ export function AppShell({
   children,
 }: AppShellProps) {
   const pathname = usePathname();
+  const [moreOpen, setMoreOpen] = useState(false);
   useRealtimeSync(userId);
+
+  const moreActive = moreNavItems.some((item) => isActiveRoute(pathname, item.href));
 
   return (
     <div className="min-h-dvh md:flex">
@@ -99,10 +108,14 @@ export function AppShell({
         </main>
       </div>
 
-      {/* Mobile tab bar */}
+      {/*
+        Mobile tab bar. Shadow and an opaque surface so it cannot disappear into
+        the page behind it — especially in dark mode, where the border token
+        matches the raised surface and a hairline alone is invisible.
+      */}
       <nav
         aria-label="Main"
-        className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-surface-raised pb-[env(safe-area-inset-bottom)] md:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-border-strong bg-surface-raised pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_12px_rgb(15_23_42_/_0.08)] md:hidden dark:shadow-[0_-4px_12px_rgb(0_0_0_/_0.45)]"
       >
         <div className="mx-auto grid max-w-md grid-cols-5">
           {primaryNavItems.slice(0, 2).map((item) => (
@@ -120,11 +133,59 @@ export function AppShell({
             </button>
           </div>
 
-          {primaryNavItems.slice(2, 4).map((item) => (
+          {primaryNavItems.slice(2, 3).map((item) => (
             <TabLink key={item.href} item={item} pathname={pathname} />
           ))}
+
+          <button
+            type="button"
+            onClick={() => setMoreOpen(true)}
+            aria-current={moreActive ? "page" : undefined}
+            aria-haspopup="dialog"
+            aria-expanded={moreOpen}
+            className={cn(
+              "flex h-16 flex-col items-center justify-center gap-1 text-[11px] transition-colors",
+              moreActive ? "text-accent" : "text-text-muted",
+            )}
+          >
+            <Menu className="size-5" aria-hidden="true" />
+            More
+          </button>
         </div>
       </nav>
+
+      <Modal
+        open={moreOpen}
+        onClose={() => setMoreOpen(false)}
+        title="More"
+        description="Everything else in DayFlow."
+        size="sm"
+      >
+        <nav aria-label="More" className="space-y-1">
+          {moreNavItems.map((item) => {
+            const active = isActiveRoute(pathname, item.href);
+            const Icon = item.icon;
+
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                aria-current={active ? "page" : undefined}
+                onClick={() => setMoreOpen(false)}
+                className={cn(
+                  "flex h-12 items-center gap-3 rounded-md px-3 text-sm transition-colors",
+                  active
+                    ? "bg-accent-subtle font-medium text-accent"
+                    : "text-text hover:bg-surface-sunken",
+                )}
+              >
+                <Icon className="size-5 shrink-0" aria-hidden="true" />
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+      </Modal>
     </div>
   );
 }
