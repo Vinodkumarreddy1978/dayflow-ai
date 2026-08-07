@@ -55,17 +55,24 @@ from the default.
 
 ### 3.3 Time and locale
 
-| Key              | Type    | Default            | Effect                                        |
-| ---------------- | ------- | ------------------ | --------------------------------------------- |
-| `timezone`       | text    | Detected on signup | The zone defining every Local Day.            |
-| `week_starts_on` | integer | 1 (Monday)         | Week boundary for weekly ranges and goals.    |
-| `time_format`    | enum    | `24h`              | `12h` or `24h` display.                       |
-| `date_format`    | enum    | `dd/mm/yyyy`       | Display format only; storage is always ISO.   |
-| `waking_start`   | time    | 07:00              | Start of the window used for gap calculation. |
-| `waking_end`     | time    | 23:00              | End of that window.                           |
+| Key               | Type    | Default            | Effect                                        |
+| ----------------- | ------- | ------------------ | --------------------------------------------- |
+| `timezone`        | text    | Detected on signup | The zone defining every Local Day.            |
+| `timezone_source` | enum    | `auto`             | `auto` or `user`. See below.                  |
+| `week_starts_on`  | integer | 1 (Monday)         | Week boundary for weekly ranges and goals.    |
+| `time_format`     | enum    | `24h`              | `12h` or `24h` display.                       |
+| `date_format`     | enum    | `dd/mm/yyyy`       | Display format only; storage is always ISO.   |
+| `waking_start`    | time    | 07:00              | Start of the window used for gap calculation. |
+| `waking_end`      | time    | 23:00              | End of that window.                           |
 
 The waking window exists so that "unrecorded time" is a meaningful figure. Without it, every
 user appears to have eight hours of unaccounted time each night.
+
+`timezone_source` records whether the stored zone was detected or chosen. The client adopts
+the device's zone when it reads `auto`, so that someone who relocates is not left with their
+days boundaried by the zone they came from, and leaves `user` alone permanently. Without the
+distinction the correction cannot tell the two apart, and a zone chosen in Settings is
+overwritten within a moment of being set - which is what it did until migration 0018.
 
 ### 3.4 Analytics
 

@@ -7,6 +7,7 @@ import {
   localDateString,
   minutesIntoLocalDay,
   parseClockTime,
+  shouldAdoptBrowserTimeZone,
   startOfLocalDay,
   wallTimeToInstant,
 } from "./timezone";
@@ -16,6 +17,64 @@ import {
  * them read the system clock or the machine's local zone, so they behave the same
  * on a laptop in Bengaluru and a CI runner in UTC. DF-TST-031.
  */
+describe("shouldAdoptBrowserTimeZone", () => {
+  it("leaves a zone the user chose alone, however far the device has travelled", () => {
+    // The bug this rule exists for: the settings screen wrote the choice, the
+    // app frame saw that the browser disagreed with the value it had just
+    // written, and put the device's zone straight back. The timezone could not
+    // be changed at all.
+    expect(
+      shouldAdoptBrowserTimeZone(
+        { timezone: "America/New_York", timezone_source: "user" },
+        "Asia/Kolkata",
+      ),
+    ).toBe(false);
+  });
+
+  it("adopts the device zone when nobody has chosen one", () => {
+    // Someone who has genuinely relocated and never overridden the setting.
+    // Without this they keep seeing their days boundaried by the zone they left.
+    expect(
+      shouldAdoptBrowserTimeZone(
+        { timezone: "Europe/London", timezone_source: "auto" },
+        "Asia/Kolkata",
+      ),
+    ).toBe(true);
+  });
+
+  it("does nothing once the detected zone is already stored", () => {
+    // The write must settle. A rule that stayed true after its own correction
+    // would be a loop rather than a correction.
+    expect(
+      shouldAdoptBrowserTimeZone(
+        { timezone: "Asia/Kolkata", timezone_source: "auto" },
+        "Asia/Kolkata",
+      ),
+    ).toBe(false);
+  });
+
+  it("waits for the row and for a zone it can trust", () => {
+    expect(shouldAdoptBrowserTimeZone(undefined, "Asia/Kolkata")).toBe(false);
+    expect(
+      shouldAdoptBrowserTimeZone(
+        { timezone: "Europe/London", timezone_source: "auto" },
+        "",
+      ),
+    ).toBe(false);
+  });
+
+  it("treats a source it does not recognise as chosen", () => {
+    // Overwriting on the strength of a value this code cannot interpret is the
+    // one outcome that loses something the user cannot get back.
+    expect(
+      shouldAdoptBrowserTimeZone(
+        { timezone: "Europe/London", timezone_source: "imported" },
+        "Asia/Kolkata",
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("localDateString", () => {
   it("returns the local day, not the UTC day", () => {
     // 18:30 UTC is already the next day in Kolkata (UTC+5:30).

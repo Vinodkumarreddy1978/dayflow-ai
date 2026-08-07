@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  LockedSettingError,
   SETTINGS_KEY_COLUMN,
   SETTINGS_WRITE_FAILURE_EVENT,
   SETTINGS_WRITE_FAILURE_ROUTE,
   SettingsWriteError,
+  assertNoLockedWeightChange,
   describeSettingsWriteError,
   reportSettingsWriteFailure,
   saveSettings,
@@ -120,6 +122,91 @@ async function failureFrom(attempt: Promise<unknown>): Promise<SettingsWriteErro
 
   throw new Error("Expected the save to be refused");
 }
+
+describe("assertNoLockedWeightChange", () => {
+  const DISTRACTED = "parent-distracted";
+  const previous = {
+    productivity_weights: { work: 0.8, [DISTRACTED]: -0.8 },
+  } as unknown as Settings;
+
+  it("refuses a change to the system group's weight", () => {
+    expect(() =>
+      assertNoLockedWeightChange(
+        { productivity_weights: { work: 0.8, [DISTRACTED]: 1 } },
+        previous,
+        DISTRACTED,
+      ),
+    ).toThrow(LockedSettingError);
+  });
+
+  it("refuses dropping the key as well as changing it", () => {
+    // A jsonb update replaces the whole value, so an object that simply omits
+    // the key removes the weight. Checking only for a different number would
+    // let that through.
+    expect(() =>
+      assertNoLockedWeightChange(
+        { productivity_weights: { work: 0.8 } },
+        previous,
+        DISTRACTED,
+      ),
+    ).toThrow(LockedSettingError);
+  });
+
+  it("allows every other group to move", () => {
+    expect(() =>
+      assertNoLockedWeightChange(
+        { productivity_weights: { work: -0.2, [DISTRACTED]: -0.8 } },
+        previous,
+        DISTRACTED,
+      ),
+    ).not.toThrow();
+  });
+
+  it("ignores patches that do not touch the weights at all", () => {
+    expect(() =>
+      assertNoLockedWeightChange({ theme: "dark" }, previous, DISTRACTED),
+    ).not.toThrow();
+  });
+
+  it("says which weight it refused, in words meant for the user", () => {
+    const error = (() => {
+      try {
+        assertNoLockedWeightChange(
+          { productivity_weights: { [DISTRACTED]: 0.5 } },
+          previous,
+          DISTRACTED,
+        );
+      } catch (thrown) {
+        return thrown as Error;
+      }
+      throw new Error("Expected the change to be refused");
+    })();
+
+    expect(error.message).toContain("Distracted Time");
+    // Shown as it stands rather than folded into the generic sentence, which
+    // would tell the user nothing about why this one save did not take.
+    expect(describeSettingsWriteError(error)).toBe(error.message);
+  });
+
+  it("does not refuse what it cannot check", () => {
+    // No tree in the cache yet, or no row to compare against. Neither is
+    // permission, but neither is evidence of a change either.
+    expect(() =>
+      assertNoLockedWeightChange(
+        { productivity_weights: { [DISTRACTED]: 1 } },
+        previous,
+        null,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertNoLockedWeightChange(
+        { productivity_weights: { [DISTRACTED]: 1 } },
+        null,
+        DISTRACTED,
+      ),
+    ).not.toThrow();
+  });
+});
 
 describe("SETTINGS_KEY_COLUMN", () => {
   it("is the column public.settings is actually keyed by", () => {

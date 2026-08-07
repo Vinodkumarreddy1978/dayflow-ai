@@ -2,6 +2,7 @@
 
 import { useEffect, type ReactNode } from "react";
 import { useSession } from "@/lib/session-context";
+import { shouldAdoptBrowserTimeZone } from "@/lib/domain/timezone";
 import { useUiStore } from "@/lib/store/ui-store";
 import { useSettings } from "@/features/settings/use-settings";
 import { useUpdateSettings } from "@/features/settings/use-update-settings";
@@ -37,22 +38,30 @@ export function AppFrame({ children }: { children: ReactNode }) {
     localStorage.setItem("dayflow-theme", settings.theme);
   }, [settings?.theme]);
 
-  // Correct the stored timezone when the user has genuinely moved.
+  // Correct the stored timezone when the user has genuinely moved, and only
+  // where the stored value was itself detected rather than chosen.
   //
-  // Runs once settings are loaded and only when the browser disagrees. Without
-  // this, someone who relocates keeps seeing their days boundaried by their old
-  // timezone, which shifts every chart by hours with no visible cause.
+  // The condition used to be nothing more than "the browser disagrees", which is
+  // also true of someone who deliberately keeps their days in a zone they are
+  // not standing in. Their choice was written, this effect saw the disagreement
+  // it had just created, and the device's zone went straight back over the top:
+  // the timezone could not be changed at all. `shouldAdoptBrowserTimeZone` is
+  // where that distinction now lives.
   useEffect(() => {
     if (!settings) return;
 
     const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (!browserZone || browserZone === settings.timezone) return;
+    if (!shouldAdoptBrowserTimeZone(settings, browserZone)) return;
 
+    // No `timezone_source`, so the row stays marked as detected and a later move
+    // is corrected too. Nothing is announced: this is a correction of a value the
+    // user never set, and the settings screen is where a change they did make is
+    // confirmed instead.
     updateSettings.mutate({ timezone: browserZone });
-    // Deliberately keyed on the stored value only: including the mutation object
+    // Deliberately keyed on the stored values only: including the mutation object
     // would re-run this on every render and fight itself.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings?.timezone]);
+  }, [settings?.timezone, settings?.timezone_source]);
 
   // Global shortcut. Ignored while typing, or it would swallow the letter.
   useEffect(() => {

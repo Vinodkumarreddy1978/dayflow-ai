@@ -8,6 +8,39 @@
  */
 
 /**
+ * Where the stored timezone came from. `settings.timezone_source`, added by
+ * migration 0018.
+ */
+export const TIME_ZONE_SOURCES = ["auto", "user"] as const;
+
+export type TimeZoneSource = (typeof TIME_ZONE_SOURCES)[number];
+
+/**
+ * Whether the app may quietly replace the stored timezone with the device's.
+ *
+ * The app frame runs this on every load so that someone who genuinely relocates
+ * stops seeing their days boundaried by the zone they left, which shifts every
+ * chart by hours with no visible cause.
+ *
+ * It used to ask only whether the two zones differed, which is also true of a
+ * user who deliberately keeps their days in a zone they are not standing in.
+ * Their choice was written and then written back over within a moment, so the
+ * timezone could not be changed at all. A correction that nobody asked for may
+ * only touch a value that nobody chose: DF-SET-011 requires this change to be
+ * warned about, and a background effect cannot warn.
+ */
+export function shouldAdoptBrowserTimeZone(
+  stored: { timezone: string; timezone_source: string } | null | undefined,
+  browserTimeZone: string | null | undefined,
+): boolean {
+  if (!stored || !browserTimeZone) return false;
+  // Anything other than a known detected value is treated as chosen. A column
+  // this code cannot interpret is not grounds for overwriting the user.
+  if (stored.timezone_source !== "auto") return false;
+  return browserTimeZone !== stored.timezone;
+}
+
+/**
  * Milliseconds by which the given timezone is ahead of UTC at this instant.
  * Computed from the instant rather than assumed, so daylight saving is handled.
  */

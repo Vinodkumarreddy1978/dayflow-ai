@@ -1,16 +1,23 @@
 "use client";
 
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { BellOff, BellRing, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge, Card, CardHeader, Skeleton } from "@/components/ui/card";
 import { Field, Input, Select, Switch } from "@/components/ui/field";
 import { useSession } from "@/lib/session-context";
-import { useCategories } from "@/features/categories/use-categories";
 import { usePush } from "@/features/notifications/use-push";
 import { useToast } from "@/components/ui/toast";
 import { useSettings } from "./use-settings";
 import { useUpdateSettings } from "./use-update-settings";
+import {
+  confirmationFor,
+  inverseOf,
+  offersUndo,
+  PUSH_DEVICE_OFF,
+  WEEK_DAY_NAMES,
+  type PendingConfirmation,
+} from "./change-guard";
 import { MIN_REMINDER_INTERVAL_MINUTES } from "@/lib/domain/reminder-rules";
 import { formatDuration } from "@/lib/format";
 import type { SettingsInput } from "@/lib/schemas";
@@ -25,6 +32,22 @@ const DataExportCard = lazy(() =>
 const DeleteAccountCard = lazy(() =>
   import("./delete-account-card").then((module) => ({
     default: module.DeleteAccountCard,
+  })),
+);
+
+// Deferred on the same grounds, and for the same reason the two dialogs above
+// are: it carries the modal, and most visits to this screen never open it.
+const ConfirmChangeDialog = lazy(() =>
+  import("./confirm-change-dialog").then((module) => ({
+    default: module.ConfirmChangeDialog,
+  })),
+);
+
+// The only card that reads the category tree, and the sixth one down. Its own
+// file so that the tree query is fetched by the people who scroll to it.
+const ProductivityCard = lazy(() =>
+  import("./productivity-card").then((module) => ({
+    default: module.ProductivityCard,
   })),
 );
 
@@ -51,11 +74,28 @@ const TIME_ZONES = (() => {
   ];
 })();
 
+/** A change held back until the user has answered the question about it. */
+interface PendingChange {
+  confirmation: PendingConfirmation;
+  commit: () => void;
+}
+
 export function SettingsView() {
-  const { email, timeZone } = useSession();
+  const { email } = useSession();
   const { data: settings, isLoading } = useSettings();
   const update = useUpdateSettings();
   const toast = useToast();
+  const [pending, setPending] = useState<PendingChange | null>(null);
+  const [deviceTimeZone, setDeviceTimeZone] = useState<string | null>(null);
+
+  // Read from the device rather than from the session, which carries the zone
+  // already stored: comparing that with itself is why the travel notice below
+  // never appeared. In an effect because this page is server-rendered, where
+  // Intl resolves to the server's own zone and disagreeing with the client is a
+  // hydration error.
+  useEffect(() => {
+    setDeviceTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone || null);
+  }, []);
 
   if (isLoading || !settings) {
     return (
@@ -67,13 +107,52 @@ export function SettingsView() {
     );
   }
 
-  // There is no Save button on purpose: each control writes immediately
-  // (DF-SET-003). The toast is the confirmation that used to be missing, so a
-  // change that looked like it did nothing is no longer silent on success.
-  const set: Setter = (key, value) => {
-    update.mutate({ [key]: value } as SettingsInput, {
-      onSuccess: () => toast.success("Saved."),
+  const save = (patch: SettingsInput, withUndo: boolean) => {
+    // Read before the write, not in the toast handler: by then the row holds the
+    // value being undone. See `inverseOf`.
+    const inverse = inverseOf(patch, settings);
+
+    update.mutate(patch, {
+      onSuccess: () => {
+        if (!withUndo) {
+          toast.success("Saved.");
+          return;
+        }
+
+        toast.success("Saved.", {
+          label: "Undo",
+          onClick: () =>
+            update.mutate(inverse, {
+              // A plain confirmation rather than a second Undo. A toast that can
+              // bounce a setting back and forth is a puzzle, not a safety net.
+              onSuccess: () => toast.success("Reverted."),
+            }),
+        });
+      },
     });
+  };
+
+  // There is no Save button on purpose: each control writes immediately
+  // (DF-SET-003), so the protection against a mistouch has to sit around the
+  // write itself. Most changes go through and the toast offers to take them
+  // back; the few in `change-guard.ts` ask first, because an Undo would arrive
+  // long after the change had quietly done its work.
+  const set: Setter = (patch) => {
+    const confirmation = confirmationFor(patch, settings, deviceTimeZone);
+
+    if (confirmation) {
+      // Every control on this screen renders from the saved row, so holding the
+      // patch back also leaves the control showing its old value. Cancelling
+      // needs to undo nothing.
+      setPending({ confirmation, commit: () => save(patch, false) });
+      return;
+    }
+
+    save(patch, offersUndo(patch));
+  };
+
+  const confirmFirst = (confirmation: PendingConfirmation, commit: () => void) => {
+    setPending({ confirmation, commit });
   };
 
   return (
@@ -86,11 +165,13 @@ export function SettingsView() {
       </header>
 
       <QueueAndRemindersCard settings={settings} set={set} />
-      <NotificationsCard settings={settings} set={set} />
+      <NotificationsCard settings={settings} set={set} confirmFirst={confirmFirst} />
       <ValidationCard settings={settings} set={set} />
-      <TimeAndLocaleCard settings={settings} set={set} browserTimeZone={timeZone} />
+      <TimeAndLocaleCard settings={settings} set={set} deviceTimeZone={deviceTimeZone} />
       <AnalyticsCard settings={settings} set={set} />
-      <ProductivityCard settings={settings} set={set} />
+      <Suspense fallback={<Skeleton className="h-40 w-full" />}>
+        <ProductivityCard settings={settings} set={set} />
+      </Suspense>
       <AiCard settings={settings} set={set} />
       <AppearanceCard settings={settings} set={set} />
       <AccountCard email={email} />
@@ -98,6 +179,19 @@ export function SettingsView() {
         <DataExportCard />
         <DeleteAccountCard />
       </Suspense>
+
+      {pending && (
+        <Suspense fallback={null}>
+          <ConfirmChangeDialog
+            pending={pending.confirmation}
+            onConfirm={() => {
+              pending.commit();
+              setPending(null);
+            }}
+            onCancel={() => setPending(null)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
@@ -106,8 +200,12 @@ export function SettingsView() {
  * Keyed off the validation schema rather than the row type, so that a control
  * offering a value the schema forbids is a compile error rather than a rejected
  * save the user discovers by trying it.
+ *
+ * A patch rather than a key and a value, because two columns that have to move
+ * together must also be undone together: one patch is one save, one toast and
+ * one Undo that leaves the row consistent.
  */
-type Setter = <K extends keyof SettingsInput>(key: K, value: SettingsInput[K]) => void;
+type Setter = (patch: SettingsInput) => void;
 
 interface SectionProps {
   settings: Settings;
@@ -132,7 +230,7 @@ function QueueAndRemindersCard({ settings, set }: SectionProps) {
               id={id}
               aria-describedby={describedBy}
               value={String(settings.queue_limit)}
-              onChange={(event) => set("queue_limit", Number(event.target.value))}
+              onChange={(event) => set({ queue_limit: Number(event.target.value) })}
             >
               {[1, 2, 3, 4, 5].map((count) => (
                 <option key={count} value={count}>
@@ -145,7 +243,7 @@ function QueueAndRemindersCard({ settings, set }: SectionProps) {
 
         <Switch
           checked={settings.reminders_enabled}
-          onChange={(checked) => set("reminders_enabled", checked)}
+          onChange={(checked) => set({ reminders_enabled: checked })}
           label="Remind me about open activities"
         />
 
@@ -160,7 +258,7 @@ function QueueAndRemindersCard({ settings, set }: SectionProps) {
                 aria-describedby={describedBy}
                 value={String(settings.reminder_interval_minutes)}
                 onChange={(event) =>
-                  set("reminder_interval_minutes", Number(event.target.value))
+                  set({ reminder_interval_minutes: Number(event.target.value) })
                 }
               >
                 {[10, 15, 30, 60, 120, 180, 240, 480].map((minutes) => (
@@ -186,11 +284,14 @@ function QueueAndRemindersCard({ settings, set }: SectionProps) {
                 const warning = Number(event.target.value);
                 // The database requires auto_close > warning. Nudging the close
                 // threshold along with the warning means the user never has to
-                // discover that rule from a rejected save.
-                if (settings.auto_close_minutes <= warning) {
-                  set("auto_close_minutes", Math.min(1440, warning + 180));
-                }
-                set("long_activity_warning_minutes", warning);
+                // discover that rule from a rejected save. Both go in one patch
+                // so that undoing puts back a pair the database still accepts.
+                set({
+                  long_activity_warning_minutes: warning,
+                  ...(settings.auto_close_minutes <= warning
+                    ? { auto_close_minutes: Math.min(1440, warning + 180) }
+                    : {}),
+                });
               }}
             >
               {[60, 120, 180, 240, 300, 360, 480, 720].map((minutes) => (
@@ -204,7 +305,7 @@ function QueueAndRemindersCard({ settings, set }: SectionProps) {
 
         <Switch
           checked={settings.auto_close_enabled}
-          onChange={(checked) => set("auto_close_enabled", checked)}
+          onChange={(checked) => set({ auto_close_enabled: checked })}
           label="Close forgotten activities automatically"
           description="Recorded as an estimate, marked as such, and always editable."
         />
@@ -223,7 +324,7 @@ function QueueAndRemindersCard({ settings, set }: SectionProps) {
                 id={id}
                 value={String(settings.auto_close_minutes)}
                 onChange={(event) =>
-                  set("auto_close_minutes", Number(event.target.value))
+                  set({ auto_close_minutes: Number(event.target.value) })
                 }
               >
                 {[120, 240, 360, 480, 600, 720, 960, 1440]
@@ -242,7 +343,13 @@ function QueueAndRemindersCard({ settings, set }: SectionProps) {
   );
 }
 
-function NotificationsCard({ settings, set }: SectionProps) {
+function NotificationsCard({
+  settings,
+  set,
+  confirmFirst,
+}: SectionProps & {
+  confirmFirst: (confirmation: PendingConfirmation, commit: () => void) => void;
+}) {
   const push = usePush();
 
   return (
@@ -274,7 +381,10 @@ function NotificationsCard({ settings, set }: SectionProps) {
               variant="secondary"
               size="sm"
               isLoading={push.isBusy}
-              onClick={() => void push.disable()}
+              // Asked about first: unsubscribing is a round trip the user cannot
+              // reverse from the toast, since re-enabling needs the browser's
+              // permission prompt again.
+              onClick={() => confirmFirst(PUSH_DEVICE_OFF, () => void push.disable())}
             >
               <BellOff className="size-4" aria-hidden="true" />
               Turn off
@@ -298,22 +408,22 @@ function NotificationsCard({ settings, set }: SectionProps) {
 
         <Switch
           checked={settings.notify_queue_reminders}
-          onChange={(checked) => set("notify_queue_reminders", checked)}
+          onChange={(checked) => set({ notify_queue_reminders: checked })}
           label="Open activity reminders"
         />
         <Switch
           checked={settings.notify_long_activity}
-          onChange={(checked) => set("notify_long_activity", checked)}
+          onChange={(checked) => set({ notify_long_activity: checked })}
           label="Long activity warnings"
         />
         <Switch
           checked={settings.notify_auto_close}
-          onChange={(checked) => set("notify_auto_close", checked)}
+          onChange={(checked) => set({ notify_auto_close: checked })}
           label="Tell me when something was closed automatically"
         />
         <Switch
           checked={settings.notify_daily_review}
-          onChange={(checked) => set("notify_daily_review", checked)}
+          onChange={(checked) => set({ notify_daily_review: checked })}
           label="Daily review"
         />
 
@@ -324,7 +434,9 @@ function NotificationsCard({ settings, set }: SectionProps) {
                 id={id}
                 type="time"
                 value={settings.daily_review_time.slice(0, 5)}
-                onChange={(event) => set("daily_review_time", `${event.target.value}:00`)}
+                onChange={(event) =>
+                  set({ daily_review_time: `${event.target.value}:00` })
+                }
                 className="w-32"
               />
             )}
@@ -333,12 +445,12 @@ function NotificationsCard({ settings, set }: SectionProps) {
 
         <Switch
           checked={settings.notify_weekly_review}
-          onChange={(checked) => set("notify_weekly_review", checked)}
+          onChange={(checked) => set({ notify_weekly_review: checked })}
           label="Weekly review"
         />
         <Switch
           checked={settings.notify_achievements}
-          onChange={(checked) => set("notify_achievements", checked)}
+          onChange={(checked) => set({ notify_achievements: checked })}
           label="Streaks and achievements"
         />
 
@@ -346,7 +458,7 @@ function NotificationsCard({ settings, set }: SectionProps) {
 
         <Switch
           checked={settings.quiet_hours_enabled}
-          onChange={(checked) => set("quiet_hours_enabled", checked)}
+          onChange={(checked) => set({ quiet_hours_enabled: checked })}
           label="Quiet hours"
           description="Reminders during this window are skipped, not saved up for later."
         />
@@ -360,7 +472,7 @@ function NotificationsCard({ settings, set }: SectionProps) {
                   type="time"
                   value={settings.quiet_hours_start.slice(0, 5)}
                   onChange={(event) =>
-                    set("quiet_hours_start", `${event.target.value}:00`)
+                    set({ quiet_hours_start: `${event.target.value}:00` })
                   }
                 />
               )}
@@ -371,7 +483,9 @@ function NotificationsCard({ settings, set }: SectionProps) {
                   id={id}
                   type="time"
                   value={settings.quiet_hours_end.slice(0, 5)}
-                  onChange={(event) => set("quiet_hours_end", `${event.target.value}:00`)}
+                  onChange={(event) =>
+                    set({ quiet_hours_end: `${event.target.value}:00` })
+                  }
                 />
               )}
             </Field>
@@ -393,7 +507,7 @@ function ValidationCard({ settings, set }: SectionProps) {
       <div className="space-y-4 p-4 pt-0">
         <Switch
           checked={settings.overlap_warn_enabled}
-          onChange={(checked) => set("overlap_warn_enabled", checked)}
+          onChange={(checked) => set({ overlap_warn_enabled: checked })}
           label="Warn about overlapping activities"
         />
 
@@ -403,7 +517,7 @@ function ValidationCard({ settings, set }: SectionProps) {
               <Select
                 id={id}
                 value={String(settings.overlap_limit)}
-                onChange={(event) => set("overlap_limit", Number(event.target.value))}
+                onChange={(event) => set({ overlap_limit: Number(event.target.value) })}
               >
                 {[1, 2, 3, 4, 5, 6, 8, 10].map((count) => (
                   <option key={count} value={count}>
@@ -424,7 +538,7 @@ function ValidationCard({ settings, set }: SectionProps) {
               id={id}
               aria-describedby={describedBy}
               value={String(settings.gap_warn_hours)}
-              onChange={(event) => set("gap_warn_hours", Number(event.target.value))}
+              onChange={(event) => set({ gap_warn_hours: Number(event.target.value) })}
             >
               {[1, 2, 3, 4, 6, 8, 12].map((hours) => (
                 <option key={hours} value={hours}>
@@ -442,7 +556,7 @@ function ValidationCard({ settings, set }: SectionProps) {
                 id={id}
                 type="time"
                 value={settings.waking_start.slice(0, 5)}
-                onChange={(event) => set("waking_start", `${event.target.value}:00`)}
+                onChange={(event) => set({ waking_start: `${event.target.value}:00` })}
               />
             )}
           </Field>
@@ -452,7 +566,7 @@ function ValidationCard({ settings, set }: SectionProps) {
                 id={id}
                 type="time"
                 value={settings.waking_end.slice(0, 5)}
-                onChange={(event) => set("waking_end", `${event.target.value}:00`)}
+                onChange={(event) => set({ waking_end: `${event.target.value}:00` })}
               />
             )}
           </Field>
@@ -465,9 +579,14 @@ function ValidationCard({ settings, set }: SectionProps) {
 function TimeAndLocaleCard({
   settings,
   set,
-  browserTimeZone,
-}: SectionProps & { browserTimeZone: string }) {
-  const mismatched = settings.timezone !== browserTimeZone;
+  deviceTimeZone,
+}: SectionProps & { deviceTimeZone: string | null }) {
+  // Null unless the device is somewhere the stored zone does not account for,
+  // which also narrows it to a string for the notice below.
+  const elsewhere =
+    deviceTimeZone !== null && deviceTimeZone !== settings.timezone
+      ? deviceTimeZone
+      : null;
 
   return (
     <Card>
@@ -483,7 +602,11 @@ function TimeAndLocaleCard({
               id={id}
               aria-describedby={describedBy}
               value={settings.timezone}
-              onChange={(event) => set("timezone", event.target.value)}
+              // Marked as chosen, which is what stops the app frame's detection
+              // from writing the device's zone back over it. Migration 0018.
+              onChange={(event) =>
+                set({ timezone: event.target.value, timezone_source: "user" })
+              }
             >
               {TIME_ZONES.map((zone) => (
                 <option key={zone} value={zone}>
@@ -494,20 +617,21 @@ function TimeAndLocaleCard({
           )}
         </Field>
 
-        {mismatched && (
+        {elsewhere && (
           // Travel is the common cause, and silently rewriting the setting would
-          // shuffle the boundaries of days already recorded.
+          // shuffle the boundaries of days already recorded. So it is offered
+          // here and confirmed, rather than applied on the user's behalf.
           <div className="flex flex-wrap items-center gap-2 rounded-md border border-warning/40 bg-warning/10 p-3">
             <p className="min-w-0 flex-1 text-xs text-text">
-              This device is in <strong>{browserTimeZone}</strong>. Your days are still
-              being counted in {settings.timezone}.
+              This device is in <strong>{elsewhere}</strong>. Your days are still being
+              counted in {settings.timezone}.
             </p>
             <Button
               size="sm"
               variant="secondary"
-              onClick={() => set("timezone", browserTimeZone)}
+              onClick={() => set({ timezone: elsewhere, timezone_source: "user" })}
             >
-              Use {browserTimeZone}
+              Use {elsewhere}
             </Button>
           </div>
         )}
@@ -518,17 +642,9 @@ function TimeAndLocaleCard({
               <Select
                 id={id}
                 value={String(settings.week_starts_on)}
-                onChange={(event) => set("week_starts_on", Number(event.target.value))}
+                onChange={(event) => set({ week_starts_on: Number(event.target.value) })}
               >
-                {[
-                  "Sunday",
-                  "Monday",
-                  "Tuesday",
-                  "Wednesday",
-                  "Thursday",
-                  "Friday",
-                  "Saturday",
-                ].map((day, index) => (
+                {WEEK_DAY_NAMES.map((day, index) => (
                   <option key={day} value={index}>
                     {day}
                   </option>
@@ -543,7 +659,7 @@ function TimeAndLocaleCard({
                 id={id}
                 value={settings.time_format}
                 onChange={(event) =>
-                  set("time_format", event.target.value as SettingsInput["time_format"])
+                  set({ time_format: event.target.value as SettingsInput["time_format"] })
                 }
               >
                 <option value="24h">24 hour</option>
@@ -573,10 +689,9 @@ function AnalyticsCard({ settings, set }: SectionProps) {
                 id={id}
                 value={settings.default_range}
                 onChange={(event) =>
-                  set(
-                    "default_range",
-                    event.target.value as SettingsInput["default_range"],
-                  )
+                  set({
+                    default_range: event.target.value as SettingsInput["default_range"],
+                  })
                 }
               >
                 <option value="daily">Day</option>
@@ -594,10 +709,10 @@ function AnalyticsCard({ settings, set }: SectionProps) {
                 id={id}
                 value={settings.default_grouping}
                 onChange={(event) =>
-                  set(
-                    "default_grouping",
-                    event.target.value as SettingsInput["default_grouping"],
-                  )
+                  set({
+                    default_grouping: event.target
+                      .value as SettingsInput["default_grouping"],
+                  })
                 }
               >
                 <option value="parent_category">Groups</option>
@@ -613,7 +728,7 @@ function AnalyticsCard({ settings, set }: SectionProps) {
               id={id}
               value={settings.chart_style}
               onChange={(event) =>
-                set("chart_style", event.target.value as SettingsInput["chart_style"])
+                set({ chart_style: event.target.value as SettingsInput["chart_style"] })
               }
             >
               <option value="donut">Donut</option>
@@ -624,97 +739,15 @@ function AnalyticsCard({ settings, set }: SectionProps) {
 
         <Switch
           checked={settings.show_distraction_default}
-          onChange={(checked) => set("show_distraction_default", checked)}
+          onChange={(checked) => set({ show_distraction_default: checked })}
           label="Show distracted time by default"
         />
         <Switch
           checked={settings.include_estimated_default}
-          onChange={(checked) => set("include_estimated_default", checked)}
+          onChange={(checked) => set({ include_estimated_default: checked })}
           label="Include estimated time by default"
           description="Estimated time comes from activities closed automatically."
         />
-      </div>
-    </Card>
-  );
-}
-
-function ProductivityCard({ settings, set }: SectionProps) {
-  const { tree } = useCategories();
-  const weights = useMemo(
-    () => (settings.productivity_weights ?? {}) as Record<string, number>,
-    [settings.productivity_weights],
-  );
-
-  return (
-    <Card>
-      <CardHeader
-        title="Productivity score"
-        description="You decide what counts. A weight of zero means a group is neither good nor bad for the score."
-      />
-
-      <div className="space-y-4 p-4 pt-0">
-        <Switch
-          checked={settings.productivity_enabled}
-          onChange={(checked) => set("productivity_enabled", checked)}
-          label="Show a productivity score"
-        />
-
-        {settings.productivity_enabled && (
-          <div className="space-y-3">
-            {tree.parents.map((parent) => {
-              const weight = weights[parent.id] ?? 0;
-
-              return (
-                <div key={parent.id} className="space-y-1.5">
-                  <div className="flex items-center justify-between gap-3">
-                    <label
-                      htmlFor={`weight-${parent.id}`}
-                      className="flex min-w-0 items-center gap-2 text-sm text-text"
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="size-2.5 shrink-0 rounded-full"
-                        style={{ backgroundColor: parent.color }}
-                      />
-                      <span className="truncate">{parent.name}</span>
-                    </label>
-                    <span className="shrink-0 text-sm tabular-nums text-text-muted">
-                      {weight > 0 ? `+${weight.toFixed(1)}` : weight.toFixed(1)}
-                    </span>
-                  </div>
-
-                  {/*
-                    The slider works in tenths and the stored weight is -1 to 1,
-                    matching get_productivity_score. Storing the slider's own
-                    integers would silently make every weight a hundred times too
-                    large, and the score would peg at 100 for everyone.
-                  */}
-                  <input
-                    id={`weight-${parent.id}`}
-                    type="range"
-                    min={-10}
-                    max={10}
-                    step={1}
-                    value={Math.round(weight * 10)}
-                    onChange={(event) =>
-                      set("productivity_weights", {
-                        ...weights,
-                        [parent.id]: Number(event.target.value) / 10,
-                      })
-                    }
-                    className="w-full accent-[var(--color-accent)]"
-                  />
-                </div>
-              );
-            })}
-
-            <p className="text-xs text-text-subtle">
-              Negative weights pull the score down, positive push it up, and zero means
-              neutral. The result is normalised to 0-100 against the time you actually
-              recorded, so a short day is not punished for being short.
-            </p>
-          </div>
-        )}
       </div>
     </Card>
   );
@@ -731,7 +764,7 @@ function AiCard({ settings, set }: SectionProps) {
       <div className="space-y-4 p-4 pt-0">
         <Switch
           checked={settings.ai_consent}
-          onChange={(checked) => set("ai_consent", checked)}
+          onChange={(checked) => set({ ai_consent: checked })}
           label="Let DayFlow generate AI insights"
           description="Aggregated totals per category are sent - never your notes, email or category names you have marked private."
         />
@@ -740,22 +773,22 @@ function AiCard({ settings, set }: SectionProps) {
           <>
             <Switch
               checked={settings.ai_daily_reports}
-              onChange={(checked) => set("ai_daily_reports", checked)}
+              onChange={(checked) => set({ ai_daily_reports: checked })}
               label="Daily summary"
             />
             <Switch
               checked={settings.ai_weekly_reports}
-              onChange={(checked) => set("ai_weekly_reports", checked)}
+              onChange={(checked) => set({ ai_weekly_reports: checked })}
               label="Weekly review"
             />
             <Switch
               checked={settings.ai_monthly_reports}
-              onChange={(checked) => set("ai_monthly_reports", checked)}
+              onChange={(checked) => set({ ai_monthly_reports: checked })}
               label="Monthly review"
             />
             <Switch
               checked={settings.ai_recommendations}
-              onChange={(checked) => set("ai_recommendations", checked)}
+              onChange={(checked) => set({ ai_recommendations: checked })}
               label="Suggestions and recommendations"
             />
           </>
@@ -779,7 +812,7 @@ function AppearanceCard({ settings, set }: SectionProps) {
               id={id}
               value={settings.theme}
               onChange={(event) =>
-                set("theme", event.target.value as SettingsInput["theme"])
+                set({ theme: event.target.value as SettingsInput["theme"] })
               }
             >
               <option value="system">Match my device</option>
@@ -799,7 +832,7 @@ function AppearanceCard({ settings, set }: SectionProps) {
                 // Committed on blur, not on change: dragging a colour picker
                 // fires continuously and would send a write per pixel.
                 onChange={(event) => setAccentDraft(event.target.value)}
-                onBlur={() => set("accent_color", accentDraft)}
+                onBlur={() => set({ accent_color: accentDraft })}
                 className="size-10 cursor-pointer rounded-md border border-border bg-transparent"
               />
               <span className="text-sm tabular-nums text-text-muted">{accentDraft}</span>
@@ -809,7 +842,7 @@ function AppearanceCard({ settings, set }: SectionProps) {
 
         <Switch
           checked={settings.compact_mode}
-          onChange={(checked) => set("compact_mode", checked)}
+          onChange={(checked) => set({ compact_mode: checked })}
           label="Compact spacing"
           description="Fits more on screen. Easier on a large monitor, tighter on a phone."
         />
